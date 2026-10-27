@@ -1,12 +1,14 @@
 # Agent Browser MVP Implementation Plan
 
+> **Current name:** Agent Smith Browser (ASB). npm and GitHub are `agent-smith-browser`. CLI binaries are `asb` and `agent-browser` (same entry, `bin/agent-browser.js`). This file is the original MVP record and still says `agent-browser` where that was the only command name.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship an MIT TypeScript package that gives agents `goto` / `snapshot` / `act` / `attach` / `detach` over a thin Playwright Chromium core, exposed as MCP + CLI, with optional attach to the user's real Chrome/Edge.
 
 **Architecture:** One `Session` owns mode (`idle` | `managed` | `attached`) and a ref table. Playwright drives managed Chromium or `connectOverCDP`. A shared a11y serializer emits budgeted text + `eN` refs. MCP and CLI are thin adapters over the same `Session` methods.
 
-**Tech Stack:** Node 20+, TypeScript 5, Playwright, `@modelcontextprotocol/sdk`, Vitest, npm package name `agent-browser` (or `@agent-browser/core` if scoped later).
+**Tech Stack:** Node 20+, TypeScript 5, Playwright, `@modelcontextprotocol/sdk`, Vitest, npm package name `agent-smith-browser` (CLI binaries `asb` and `agent-browser`).
 
 ## Global Constraints
 

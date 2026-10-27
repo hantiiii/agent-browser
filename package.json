@@ -1,11 +1,16 @@
 {
-  "name": "agent-browser",
+  "name": "agent-smith-browser",
   "version": "0.2.0",
-  "description": "Attach-first a11y+refs browser for AI agents, with advisory canvas hints. Real Chrome/Edge over CDP, MCP + CLI.",
+  "description": "Agent Smith Browser (ASB) — attach-first a11y+refs browser for AI agents. Real Chrome/Edge over CDP, MCP + CLI. Advisory canvas hints.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hantiiii/agent-smith-browser.git"
+  },
   "bin": {
-    "agent-browser": "./bin/agent-browser.js"
+    "agent-browser": "./bin/agent-browser.js",
+    "asb": "./bin/agent-browser.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

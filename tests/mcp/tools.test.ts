@@ -5,7 +5,15 @@ type Registered = { description?: string };
 
 describe('MCP tools', () => {
   it('exposes snapshot hints, screenshot, and click_xy', () => {
-    const server = createServer() as unknown as { _registeredTools: Record<string, Registered> };
+    const server = createServer() as unknown as {
+      _registeredTools: Record<string, Registered>;
+      server: { _serverInfo: { name: string; title?: string; version: string } };
+    };
+    expect(server.server._serverInfo).toMatchObject({
+      name: 'agent-smith-browser',
+      title: 'Agent Smith Browser',
+      version: '0.2.0',
+    });
     const tools = server._registeredTools;
     expect(Object.keys(tools).sort()).toEqual([
       'act',
