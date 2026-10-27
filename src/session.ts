@@ -4,6 +4,7 @@ import type { ActArgs, GotoResult, SessionMode, SnapshotNode, SnapshotResult } f
 import { serializeAxTree } from './a11y/serialize.js';
 import { getAxTree, launchManaged as defaultLaunch } from './backends/managed.js';
 import { connectAttach as defaultAttach } from './backends/attach.js';
+import { resolveSettleMs } from './settle.js';
 import type { Browser } from 'playwright';
 import type { BrowserHandle } from './backends/managed.js';
 
@@ -34,19 +35,23 @@ export class Session {
     return this.handle.page;
   }
 
-  async goto(url: string): Promise<GotoResult> {
+  async goto(url: string, opts?: { settleMs?: number }): Promise<GotoResult> {
+    const settleMs = resolveSettleMs(opts?.settleMs);
     const page = await this.ensurePage();
     this.invalidate();
     try {
       await page.goto(url, { waitUntil: 'domcontentloaded' });
+      if (settleMs > 0) await page.waitForTimeout(settleMs);
       return { ok: true, url: page.url() };
     } catch (e) {
       return { ok: false, error: (e as Error).message, url: page.url() };
     }
   }
 
-  async snapshot(): Promise<SnapshotResult> {
+  async snapshot(opts?: { settleMs?: number }): Promise<SnapshotResult> {
+    const settleMs = resolveSettleMs(opts?.settleMs);
     const page = await this.ensurePage();
+    if (settleMs > 0) await page.waitForTimeout(settleMs);
     const { text, nodes } = serializeAxTree(await getAxTree(page));
     this.invalidate();
     // ref -> locator via getByRole + nth for duplicate role/name pairs (MVP: may be ambiguous)

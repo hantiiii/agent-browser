@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { Session } from '../session.js';
+import { MAX_SETTLE_MS } from '../settle.js';
 
 /** One process-wide session shared by all tool calls. */
 const session = new Session();
@@ -10,6 +11,10 @@ const session = new Session();
 type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
 
 const ok = (text: string): ToolResult => ({ content: [{ type: 'text', text }] });
+
+const settleMsSchema = z.number().int().min(0).max(MAX_SETTLE_MS).optional().describe(
+  `Optional pause in ms (default 0, max ${MAX_SETTLE_MS}). Plain wait after domcontentloaded on goto, or before the tree is read on snapshot. Try 8000–10000 when the page is still a shell, spinner, or bot interstitial. Not networkidle, and not a bypass.`,
+);
 
 /** Errors become plain text — message only, never a stack. */
 async function run(fn: () => Promise<string>): Promise<ToolResult> {
@@ -25,19 +30,22 @@ export function createServer(): McpServer {
   const server = new McpServer({ name: 'agent-browser', version: '0.1.0' });
 
   server.registerTool('goto', {
-    description: 'Navigate the active page (waits for domcontentloaded). Invalidates refs; call snapshot next.',
-    inputSchema: { url: z.string().describe('Absolute URL to open') },
-  }, async ({ url }) => run(async () => {
-    const r = await session.goto(url);
+    description: 'Navigate the active page (waits for domcontentloaded, then optional settleMs). Invalidates refs; call snapshot next.',
+    inputSchema: {
+      url: z.string().describe('Absolute URL to open'),
+      settleMs: settleMsSchema,
+    },
+  }, async ({ url, settleMs }) => run(async () => {
+    const r = await session.goto(url, { settleMs });
     if (!r.ok) throw new Error(`goto failed: ${r.error}`);
     return `ok ${r.url} (mode=${session.mode})`;
   }));
 
   server.registerTool('snapshot', {
-    description: 'Compact accessibility tree of the active tab. Interactive elements get refs e1, e2, … for act.',
-    inputSchema: {},
-  }, async () => run(async () => {
-    const s = await session.snapshot();
+    description: 'Compact accessibility tree of the active tab. Optional settleMs pauses before reading the tree. Interactive elements get refs e1, e2, … for act.',
+    inputSchema: { settleMs: settleMsSchema },
+  }, async ({ settleMs }) => run(async () => {
+    const s = await session.snapshot({ settleMs });
     return `url: ${s.url}\n${s.text}`;
   }));
 
