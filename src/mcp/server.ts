@@ -77,7 +77,7 @@ export function createServer(): McpServer {
   }));
 
   server.registerTool('snapshot', {
-    description: 'Compact accessibility tree of the active tab. Optional settleMs pauses before reading the tree. Interactive elements get refs e1, e2, … for act. Text ends with advisory hints (a11y | canvas | mixed | sparse) from live heuristics. Hints do not switch tools.',
+    description: 'Compact accessibility tree of the one active page. If the last act or click_xy opened a popup in the same browser context, this is that popup. Optional settleMs pauses before reading the tree. Interactive elements get refs e1, e2, … for act. Text ends with advisory hints (a11y | canvas | mixed | sparse) from live heuristics. Hints do not switch tools.',
     inputSchema: { settleMs: settleMsSchema },
   }, async ({ settleMs }) => run(async () => {
     const s = await session.snapshot({ settleMs });
@@ -85,7 +85,7 @@ export function createServer(): McpServer {
   }));
 
   server.registerTool('act', {
-    description: 'Act on a ref from the last snapshot. click (no nav wait) | type (replaces value) | press (Playwright key name, e.g. Enter). Snapshot again if the page may have changed.',
+    description: 'Act on a ref from the last snapshot. click (no nav wait) | type (replaces value) | press (Playwright key name, e.g. Enter). A popup opened by the action becomes the active page. Snapshot again if the page may have changed.',
     inputSchema: {
       ref: z.string().regex(/^e\d+$/).describe('Ref from last snapshot, e.g. e3'),
       kind: z.enum(['click', 'type', 'press']),
@@ -117,7 +117,7 @@ export function createServer(): McpServer {
   });
 
   server.registerTool('click_xy', {
-    description: 'Click a viewport point. Default space is css (pixels from the top-left). space=normalized takes x and y in 0–1. Response includes the viewport size and the CSS point clicked. Does not use a11y refs. Explicit tool: snapshot/act stay the default, and hints never call this for you.',
+    description: 'Click a viewport point. Default space is css (pixels from the top-left). space=normalized takes x and y in 0–1. Response includes the viewport size and the CSS point clicked. A popup opened by the click becomes the active page. Does not use a11y refs. Explicit tool: snapshot/act stay the default, and hints never call this for you.',
     inputSchema: {
       x: z.number().describe('X in CSS pixels, or 0–1 when space is normalized'),
       y: z.number().describe('Y in CSS pixels, or 0–1 when space is normalized'),

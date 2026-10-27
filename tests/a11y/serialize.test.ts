@@ -22,6 +22,17 @@ describe('serializeAxTree', () => {
     expect(nodes.map((n) => n.ref)).toEqual(['e1', 'e2']);
   });
 
+  it('collapses non-breaking spaces in accessible names', () => {
+    const root = {
+      role: 'RootWebArea',
+      name: '',
+      children: [{ role: 'button', name: 'Go\u00a0\u00a0In', children: [] }],
+    };
+    const { text, nodes } = serializeAxTree(root);
+    expect(nodes[0]?.name).toBe('Go In');
+    expect(text).toContain('button "Go In"');
+  });
+
   it('does not consume eN for non-actionable nodes (no holes)', () => {
     const root = {
       role: 'RootWebArea',

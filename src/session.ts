@@ -1,4 +1,4 @@
-import type { Locator, Page } from 'playwright';
+import type { BrowserContext, Locator, Page } from 'playwright';
 import { AgentBrowserError } from './types.js';
 import type {
   ActArgs,
@@ -68,13 +68,18 @@ export class Session {
     if (settleMs > 0) await page.waitForTimeout(settleMs);
     const { text, nodes } = serializeAxTree(await getAxTree(page));
     this.invalidate();
-    // ref -> locator via getByRole + nth for duplicate role/name pairs (MVP: may be ambiguous)
+    // ref -> locator via getByRole + nth for duplicate role/name pairs (MVP: may be ambiguous).
+    // Names are whitespace-normalized so a non-breaking space still matches the snapshot text.
     const seen = new Map<string, number>();
     for (const n of nodes) {
-      const key = `${n.role}\u0000${n.name}`;
+      const name = normalizeAccessibleName(n.name);
+      const key = `${n.role}\u0000${name}`;
       const idx = seen.get(key) ?? 0;
       seen.set(key, idx + 1);
-      const loc = page.getByRole(n.role as Parameters<Page['getByRole']>[0], n.name ? { name: n.name, exact: true } : {});
+      const loc = page.getByRole(
+        n.role as Parameters<Page['getByRole']>[0],
+        name ? { name: accessibleNamePattern(name) } : {},
+      );
       this.locators.set(n.ref, loc.nth(idx));
     }
     this.lastSnapshotNodes = nodes;
@@ -133,7 +138,7 @@ export class Session {
   /**
    * Click a viewport point. Does not require a snapshot or a ref.
    * CSS pixels are the default. Normalized 0–1 values are scaled by the CSS viewport.
-   * Refs are cleared only when the click changes the document URL.
+   * Refs are cleared when the click changes the document URL or opens a new page.
    */
   async clickXy(args: ClickXyArgs, opts?: { settleMs?: number }): Promise<ClickXyResult> {
     const settleMs = resolveSettleMs(opts?.settleMs);
@@ -152,12 +157,13 @@ export class Session {
     const point = mapClick(space, args.x, args.y, viewport.width, viewport.height);
     const urlBefore = page.url();
     try {
-      await page.mouse.click(point.x, point.y);
+      await this.runFollowingPopup(page, () => page.mouse.click(point.x, point.y));
     } catch (e) {
       if (e instanceof AgentBrowserError) throw e;
       throw new AgentBrowserError(`click_xy failed: ${(e as Error).message}`);
     }
-    if (page.url() !== urlBefore) this.invalidate();
+    const current = this.handle?.page ?? page;
+    if (current !== page || current.url() !== urlBefore) this.invalidate();
     return { ok: true, x: point.x, y: point.y, space, input: { x: args.x, y: args.y }, viewport };
   }
 
@@ -171,24 +177,65 @@ export class Session {
     const page = this.handle.page;
     const urlBefore = page.url();
     try {
-      if (args.kind === 'click') {
-        await loc.click({ timeout: 10_000 }); // does not wait for navigation
-      } else if (args.kind === 'type') {
-        await loc.fill('', { timeout: 10_000 });
-        await loc.fill(args.value ?? '', { timeout: 10_000 });
-      } else if (args.kind === 'press') {
-        if (!args.value) throw new AgentBrowserError('press requires value (Playwright key name, e.g. Enter)');
-        await loc.press(args.value, { timeout: 10_000 });
-      } else {
-        throw new AgentBrowserError(`unknown act kind ${(args as ActArgs).kind}`);
-      }
+      await this.runFollowingPopup(page, async () => {
+        if (args.kind === 'click') {
+          await loc.click({ timeout: 10_000 }); // does not wait for navigation
+        } else if (args.kind === 'type') {
+          await loc.fill('', { timeout: 10_000 });
+          await loc.fill(args.value ?? '', { timeout: 10_000 });
+        } else if (args.kind === 'press') {
+          if (!args.value) throw new AgentBrowserError('press requires value (Playwright key name, e.g. Enter)');
+          await loc.press(args.value, { timeout: 10_000 });
+        } else {
+          throw new AgentBrowserError(`unknown act kind ${(args as ActArgs).kind}`);
+        }
+      });
     } catch (e) {
       this.invalidate();
       if (e instanceof AgentBrowserError) throw e;
       throw new AgentBrowserError(`act failed on ${args.ref}: ${(e as Error).message}; snapshot first`);
     }
-    if (page.url() !== urlBefore) this.invalidate();
+    const current = this.handle.page;
+    if (current !== page || current.url() !== urlBefore) this.invalidate();
     return { ok: true };
+  }
+
+  /**
+   * Follow a popup or new page created by this action in the same browser context.
+   * Tabs that were already open stay put. There is still one active page afterward.
+   */
+  private async runFollowingPopup(page: Page, action: () => Promise<void>): Promise<void> {
+    const context = page.context();
+    const before = new Set(context.pages());
+    let newest: Page | undefined;
+    const note = (next: Page) => {
+      if (!before.has(next)) newest = next;
+    };
+    context.on('page', note);
+    page.on('popup', note);
+    try {
+      await action();
+      // The page event can land just after the click promise resolves.
+      if (!openedPage(context, before, newest)) {
+        const deadline = Date.now() + POPUP_GRACE_MS;
+        while (Date.now() < deadline && !openedPage(context, before, newest)) {
+          await new Promise((resolve) => setTimeout(resolve, 15));
+        }
+      }
+    } finally {
+      context.off('page', note);
+      page.off('popup', note);
+    }
+    await this.adoptOpenedPage(context, before, newest);
+  }
+
+  private async adoptOpenedPage(context: BrowserContext, before: Set<Page>, newest: Page | undefined): Promise<void> {
+    const next = openedPage(context, before, newest);
+    if (!next || !this.handle || next === this.handle.page) return;
+    this.handle.page = next;
+    this.invalidate();
+    await next.waitForLoadState('domcontentloaded', { timeout: 5_000 }).catch(() => {});
+    await next.bringToFront().catch(() => {});
   }
 
   async attach(cdpUrl: string): Promise<{ ok: true; url: string }> {
@@ -228,6 +275,28 @@ export class Session {
   async close(): Promise<void> {
     await this.detach();
   }
+}
+
+/** How long to watch for a popup the click already started. No-popup actions pay this wait. */
+const POPUP_GRACE_MS = 200;
+
+function openedPage(context: BrowserContext, before: Set<Page>, newest: Page | undefined): Page | undefined {
+  if (newest && !newest.isClosed()) return newest;
+  return context.pages().filter((p) => !before.has(p) && !p.isClosed()).at(-1);
+}
+
+function normalizeAccessibleName(name: string): string {
+  return name.replace(/\s+/g, ' ').trim();
+}
+
+/** Whole-string match where any whitespace run, including NBSP, separates the same words. */
+function accessibleNamePattern(name: string): RegExp {
+  const parts = normalizeAccessibleName(name).split(' ').filter(Boolean).map(escapeRegExp);
+  return new RegExp(`^\\s*${parts.join('\\s+')}\\s*$`);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function resolveClickSpace(space: ClickSpace | undefined): ClickSpace {
