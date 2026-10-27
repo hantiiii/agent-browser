@@ -1,23 +1,34 @@
 # Agent Smith Browser (ASB)
 
-The agent is already in the system. Attach-first a11y+refs for AI agents, with advisory canvas hints (`screenshot`, `click_xy`, `hints.mode`). Drive the real Chrome or Edge on that person's computer as accessibility-tree text with stable `eN` refs. Same core behind an **MCP server** and a small **CLI**. MIT.
+**Agent Smith Browser (ASB) exists so an agent can attach to the user's own Chrome or Edge on that user's computer** and drive the live session over CDP (`http://127.0.0.1:9222`). Cookies, logins, and the machine's IP stay in that browser. The default loop is accessibility-tree text, stable `eN` refs, and `act`. Advisory canvas hints (`screenshot`, `click_xy`, `hints.mode`) cover pages where the tree is thin. Same core behind an **MCP server** and a small **CLI**. MIT.
 
-**Names.** Display name: **ASB** (Agent Smith Browser). npm package and GitHub repository: `agent-smith-browser`. CLI binaries: `asb` and `agent-browser` (one program). After the GitHub rename, `https://github.com/hantiiii/agent-browser` redirects to `https://github.com/hantiiii/agent-smith-browser`.
+Managed Chromium is secondary: a fast demo for simple public pages such as example.com.
+
+```bash
+# Normal path — Chrome or Edge already running on this computer
+asb attach http://127.0.0.1:9222
+asb snapshot --cdp http://127.0.0.1:9222 --settle-ms 8000
+
+# Fast demo — managed Chromium, public page
+asb demo
+```
+
+**Names.** Display name: **Agent Smith Browser (ASB)**. npm package: `agent-smith-browser`. CLI binaries: `asb` and `agent-browser` (one program). Repository: https://github.com/hantiiii/agent-smith-browser (`https://github.com/hantiiii/agent-browser` redirects).
 
 ## Why
 
-Screenshot-and-click agents spend a lot of tokens and still miss. Sites with bot mitigation also refuse managed or headless Chromium. `goto` waits only for `domcontentloaded`, so a snapshot in the same breath often lands on an empty shell, a half-rendered SPA, or a challenge page.
+Screenshot-and-click agents spend a lot of tokens and still miss. A fresh managed or headless Chromium starts with none of the user's cookies, and sites with bot mitigation often refuse it. `goto` waits only for `domcontentloaded`, so a snapshot in the same breath often lands on an empty shell, a half-rendered SPA, or a challenge page.
 
-Humans and agents need a thinner view: accessibility-tree text, stable `eN` refs, and actions by those refs. When the managed browser is what gets blocked, or the task needs cookies and a geo-correct IP that already exist, attach to the **real** Chrome or Edge on that person's computer, then wait until the UI is actually in the tree (`--settle-ms` / `settleMs`). Managed Chromium remains the right default for simple public pages such as example.com.
+The useful loop is the browser the person already runs. Attach over CDP, read accessibility-tree text with stable `eN` refs, and act by those refs. Wait until the UI is actually in the tree (`--settle-ms` / `settleMs`). Use managed Chromium for a quick public-page check such as example.com.
 
 ## When to use this
 
-- **Attach first** to the user's own Chrome or Edge over CDP (`http://127.0.0.1:9222`) when you need a logged-in, geo-correct session, or when the site blocks headless Chromium. **Booking, eBay, Airbnb, and Allegro block headless** — attach, then wait until the UI appears. In a maintainer pass, managed Chromium returned an empty tree (Booking), a "SORRY" wall (eBay), or a thin tree (Airbnb). Attach did not save an immediate snapshot: Booking was still empty, and eBay still raced to "SORRY". After the attached page settled for about 8–10 seconds, Booking showed a real UI (about 266 refs in that run) and eBay did too (about 141). Airbnb's attached tree was much fuller after the same kind of wait. Treat Allegro/DataDome the same way. This is not a bypass: no fingerprint spoofing, no captcha solving, no promise the wall stays down.
+- **The user's own Chrome or Edge, on that computer.** This is the normal path. Start the browser with remote debugging and `attach` to `http://127.0.0.1:9222` for a logged-in, geo-correct session, including sites that refuse headless Chromium. **Booking, eBay, Airbnb, and Allegro block headless** — attach, then wait until the UI appears. In a maintainer pass, managed Chromium returned an empty tree (Booking), a "SORRY" wall (eBay), or a thin tree (Airbnb). Attach did not save an immediate snapshot: Booking was still empty, and eBay still raced to "SORRY". After the attached page settled for about 8–10 seconds, Booking showed a real UI (about 266 refs in that run) and eBay did too (about 141). Airbnb's attached tree was much fuller after the same kind of wait. Treat Allegro/DataDome the same way. This is not a bypass: no fingerprint spoofing, no captcha solving, no promise the wall stays down.
 - **Board Game Arena, Tabletopia, and Kurnik-style lobbies** are safe attach-first a11y targets when a skin or layout shift would break a hand-maintained pixel map. That same pass snapshotted Board Game Arena and Tabletopia in both modes. Attach produced the better Board Game Arena lobby tree; managed was often still mid-SPA load. Tabletopia snapshotted cleanly either way. Same snapshot/act tools as any other page. There is no game-specific API.
 - **Drive forms and dashboards by refs** (`snapshot` → `act` → `snapshot`) instead of screenshots or coordinate maps: admin panels, SaaS settings, GitHub and GitLab UI.
 - **MCP and CLI for compact text.** Cursor, Claude Desktop, and other MCP clients that want a short tree, plus one-shot CLI commands. Refs stay the default. `screenshot` and `click_xy` are for pages whose hints say the tree is not enough. example.com passed managed and attach with no extra wait.
 
-Managed Chromium is appropriate for simple sites. For hardened marketplaces, attach and settle. Do not expect managed mode to clear them.
+Attach on the user's machine, then settle, for real sessions and for hardened marketplaces. Managed Chromium is the fast demo for simple public pages.
 
 ## How agents should loop
 
@@ -72,7 +83,12 @@ npm install -g agent-smith-browser
 asb …                    # short command
 agent-browser …          # same CLI
 npx --yes --package agent-smith-browser asb …
-npx playwright install chromium     # managed browser for the default mode
+```
+
+Real work attaches to Chrome or Edge already running on this computer (steps under **Attach to your own Chrome or Edge**). Install Playwright's Chromium when you want the managed example.com demo:
+
+```bash
+npx playwright install chromium     # fast demo only (asb demo / example.com)
 ```
 
 ```bash
@@ -96,26 +112,35 @@ Requires Node 20+.
 
 The MCP server identifier is `agent-smith-browser`. Clients that show a title see **Agent Smith Browser**. `agent-browser mcp` starts the same server.
 
-Tools: `goto(url, settleMs?)`, `snapshot(settleMs?)` (text includes `hints`), `act(ref, kind, value?)`, `screenshot(fullPage?, settleMs?, awaitPaint?)`, `click_xy(x, y, space?)`, `attach(cdpUrl)`, `detach()`. `settleMs` defaults to 0. `click_xy` has no paint wait.
+Tools: `attach(cdpUrl)`, `goto(url, settleMs?)`, `snapshot(settleMs?)` (text includes `hints`), `act(ref, kind, value?)`, `screenshot(fullPage?, settleMs?, awaitPaint?)`, `click_xy(x, y, space?)`, `detach()`. `settleMs` defaults to 0. `click_xy` has no paint wait.
 
-Call `attach("http://127.0.0.1:9222")` before `goto` when the site should see the user's real browser. Otherwise the first `goto` or `snapshot` launches managed Chromium. Pass `settleMs` when the tree would otherwise be read too early. See **How agents should loop** for ref lifetime, settle, and the one active page (including a popup a click just opened).
+Normal path for real work, on the same computer as the browser:
+
+1. Start Chrome or Edge with remote debugging on `127.0.0.1:9222` (see **Attach to your own Chrome or Edge**).
+2. `attach("http://127.0.0.1:9222")`.
+3. `goto`, `snapshot`, and `act` on that session. Pass `settleMs` (often `8000`–`10000`) when the tree would otherwise be read too early. Omit it on a canvas or mixed click loop.
+
+A first `goto` or `snapshot` with no `attach` launches managed Chromium. That is the fast demo (`https://example.com`), for a public page that does not need the user's session. See **How agents should loop** for ref lifetime, settle, and the one active page (including a popup a click just opened).
 
 ## CLI
 
 Every command is one-shot (no daemon, no REPL, no session file). For multi-step flows use MCP.
 
 ```bash
-asb demo                                            # example.com snapshot smoke
+# Normal path — attach to Chrome or Edge on this computer
+asb attach http://127.0.0.1:9222                    # check the CDP endpoint
+asb snapshot --cdp http://127.0.0.1:9222            # current tab
+asb snapshot --cdp http://127.0.0.1:9222 --settle-ms 10000
+asb act e3 click --cdp http://127.0.0.1:9222
+asb click-xy 0.5 0.5 --space normalized --cdp http://127.0.0.1:9222
+asb mcp                                             # MCP stdio server (multi-step)
+
+# Fast demo — managed Chromium, example.com
+asb demo
 agent-browser demo                                  # same binary as asb
 asb goto https://example.com
 asb snapshot https://example.com
-asb snapshot --cdp http://127.0.0.1:9222            # current tab of your Chrome
-asb snapshot --cdp http://127.0.0.1:9222 --settle-ms 10000
-asb act e3 click --cdp http://127.0.0.1:9222
 asb screenshot https://example.com --out /tmp/page.png
-asb click-xy 0.5 0.5 --space normalized --cdp http://127.0.0.1:9222
-asb attach http://127.0.0.1:9222                    # check endpoint is reachable
-asb mcp                                             # MCP stdio server
 ```
 
 `--settle-ms` defaults to `0` (integer, max `30000`). On `snapshot <url>`, `screenshot <url>`, `click-xy` with a url, and `goto` it pauses after `domcontentloaded`. On a current-tab `snapshot`, `screenshot`, `click-xy`, or `act` it pauses before that command. `act` requires `--cdp`: it snapshots the attached tab, then acts. A managed one-shot would open a blank browser and exit. One-shot `click-xy` needs `--cdp` or a url.
