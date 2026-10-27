@@ -7,26 +7,32 @@ import { Session } from './session.js';
 import { parseSettleMsFlag, MAX_SETTLE_MS } from './settle.js';
 import type { ActKind, ClickSpace, ClickXyResult, ScreenshotResult } from './types.js';
 
-const HELP = `agent-browser — a11y snapshot + refs browser for AI agents
+const CLI = 'asb';
+
+const HELP = `Agent Smith Browser (ASB) — attach-first a11y+refs for AI agents
+Advisory canvas hints: screenshot, click_xy, hints.mode (a11y | canvas | mixed | sparse).
+
+Package and repo: agent-smith-browser. Examples use "${CLI}".
+"agent-browser" is the same program.
 
 Usage (every command is one-shot: no daemon, no REPL, no session file):
-  agent-browser mcp                         Run MCP server on stdio (use this for multi-step agents)
-  agent-browser demo                        goto https://example.com and print snapshot (smoke)
-  agent-browser goto <url> [--cdp <url>] [--settle-ms <n>]
+  ${CLI} mcp                         Run MCP server on stdio (use this for multi-step agents)
+  ${CLI} demo                        goto https://example.com and print snapshot (smoke)
+  ${CLI} goto <url> [--cdp <url>] [--settle-ms <n>]
                                             Navigate; prints JSON result
-  agent-browser snapshot [url] [--cdp <url>] [--settle-ms <n>]
+  ${CLI} snapshot [url] [--cdp <url>] [--settle-ms <n>]
                                             Print a11y snapshot (optionally goto url first)
-  agent-browser act <ref> <click|type|press> [value] --cdp <url> [--settle-ms <n>]
+  ${CLI} act <ref> <click|type|press> [value] --cdp <url> [--settle-ms <n>]
                                             Snapshot the attached tab, then act on <ref>
-  agent-browser screenshot [url] [--cdp <url>] [--full] [--out <path>] [--settle-ms <n>]
+  ${CLI} screenshot [url] [--cdp <url>] [--full] [--out <path>] [--settle-ms <n>]
                                             Viewport PNG (1 image px per CSS px). Prints JSON path + viewport.
                                             --full captures the scrollable page (not a click-xy map).
-  agent-browser click-xy <x> <y> [--space css|normalized] [--cdp <url>] [url] [--settle-ms <n>]
+  ${CLI} click-xy <x> <y> [--space css|normalized] [--cdp <url>] [url] [--settle-ms <n>]
                                             Click viewport coordinates. css pixels (default) or 0–1 normalized.
                                             Prints the CSS point clicked and the viewport size.
                                             One-shot needs --cdp or a url. Alias: click_xy.
-  agent-browser attach <cdpUrl>             Check that a Chrome/Edge CDP endpoint is reachable
-  agent-browser detach                      No-op in one-shot CLI (nothing persists)
+  ${CLI} attach <cdpUrl>             Check that a Chrome/Edge CDP endpoint is reachable
+  ${CLI} detach                      No-op in one-shot CLI (nothing persists)
 
 --settle-ms <n>   Extra pause after domcontentloaded (goto / snapshot <url> / screenshot <url> / click-xy with a url / demo)
                   or before the open tab is read (snapshot, screenshot, click-xy, and act).
@@ -41,7 +47,7 @@ Usage (every command is one-shot: no daemon, no REPL, no session file):
   (cookies, logged-in sessions, input). Only attach to a browser you are OK handing over.
 
 Managed one-shots start a fresh browser and close it on exit, so state does not carry
-between commands. For multi-step flows use "agent-browser mcp".
+between commands. For multi-step flows use "${CLI} mcp".
 
 Snapshot text ends with a hints JSON line: mode a11y | canvas | mixed | sparse.
 Hints are advisory and do not switch tools. They are live page heuristics, not a
@@ -130,7 +136,7 @@ export async function main(argv: string[], deps: CliDeps = {}) {
       return;
     case 'goto': {
       const url = args[0];
-      if (!url) throw new Error('usage: agent-browser goto <url>');
+      if (!url) throw new Error(`usage: ${CLI} goto <url>`);
       out(await withSession(cdp, (s) => s.goto(url, settleOpt)));
       return;
     }
@@ -145,9 +151,9 @@ export async function main(argv: string[], deps: CliDeps = {}) {
       return;
     case 'act': {
       const [ref, kind, value] = args;
-      if (!ref || !kind) throw new Error('usage: agent-browser act <ref> <click|type|press> [value] --cdp <url>');
+      if (!ref || !kind) throw new Error(`usage: ${CLI} act <ref> <click|type|press> [value] --cdp <url>`);
       if (!['click', 'type', 'press'].includes(kind)) throw new Error(`unknown kind ${kind}`);
-      if (!cdp) throw new Error('one-shot act needs --cdp <url> (a managed browser would be blank). For multi-step use "agent-browser mcp".');
+      if (!cdp) throw new Error(`one-shot act needs --cdp <url> (a managed browser would be blank). For multi-step use "${CLI} mcp".`);
       out(await withSession(cdp, async (s) => {
         await s.snapshot(settleOpt);
         return s.act({ ref, kind: kind as ActKind, value });
@@ -161,7 +167,7 @@ export async function main(argv: string[], deps: CliDeps = {}) {
         const url = args[0];
         if (url) await s.goto(url, settleOpt);
         const shot = await s.screenshot({ fullPage, settleMs: url ? undefined : settleMs });
-        const path = outPath ?? join(tmpdir(), `agent-browser-${randomBytes(8).toString('hex')}.png`);
+        const path = outPath ?? join(tmpdir(), `asb-${randomBytes(8).toString('hex')}.png`);
         writeFileSync(path, shot.bytes);
         const { bytes, ...rest } = shot;
         out({ ...rest, path, byteLength: bytes.length });
@@ -174,10 +180,10 @@ export async function main(argv: string[], deps: CliDeps = {}) {
       const space = spaceRaw === undefined ? undefined : parseSpace(spaceRaw);
       const [xRaw, yRaw, url] = args;
       if (xRaw === undefined || yRaw === undefined) {
-        throw new Error('usage: agent-browser click-xy <x> <y> [--space css|normalized] [--cdp <url>] [url]');
+        throw new Error(`usage: ${CLI} click-xy <x> <y> [--space css|normalized] [--cdp <url>] [url]`);
       }
       if (!cdp && !url) {
-        throw new Error('one-shot click-xy needs --cdp <url> or a page url (a managed browser would be blank). For multi-step use "agent-browser mcp".');
+        throw new Error(`one-shot click-xy needs --cdp <url> or a page url (a managed browser would be blank). For multi-step use "${CLI} mcp".`);
       }
       const x = parseNumber(xRaw, 'x');
       const y = parseNumber(yRaw, 'y');
@@ -189,7 +195,7 @@ export async function main(argv: string[], deps: CliDeps = {}) {
     }
     case 'attach': {
       const url = args[0] ?? cdp;
-      if (!url) throw new Error('usage: agent-browser attach <cdpUrl>');
+      if (!url) throw new Error(`usage: ${CLI} attach <cdpUrl>`);
       out(await withSession(undefined, (s) => s.attach(url)));
       return;
     }

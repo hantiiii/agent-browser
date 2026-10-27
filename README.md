@@ -1,6 +1,8 @@
-# agent-browser
+# Agent Smith Browser (ASB)
 
-Attach to the user's real Chrome or Edge and drive the page as accessibility-tree text with stable `eN` refs. Same core behind an **MCP server** and a small **CLI**. MIT.
+The agent is already in the system. Attach-first a11y+refs for AI agents, with advisory canvas hints (`screenshot`, `click_xy`, `hints.mode`). Drive the real Chrome or Edge on that person's computer as accessibility-tree text with stable `eN` refs. Same core behind an **MCP server** and a small **CLI**. MIT.
+
+**Names.** Display name: **ASB** (Agent Smith Browser). npm package and GitHub repository: `agent-smith-browser`. CLI binaries: `asb` and `agent-browser` (one program). After the GitHub rename, `https://github.com/hantiiii/agent-browser` redirects to `https://github.com/hantiiii/agent-smith-browser`.
 
 ## Why
 
@@ -60,8 +62,15 @@ When the mode is `canvas` or `mixed`, call `screenshot` and `click_xy` yourself.
 ## Install
 
 ```bash
-npm install -g agent-browser        # or: npx agent-browser …
+npm install -g agent-smith-browser
+asb …                    # short command
+agent-browser …          # same CLI
+npx --yes --package agent-smith-browser asb …
 npx playwright install chromium     # managed browser for the default mode
+```
+
+```bash
+git clone https://github.com/hantiiii/agent-smith-browser.git
 ```
 
 Requires Node 20+.
@@ -71,13 +80,15 @@ Requires Node 20+.
 ```json
 {
   "mcpServers": {
-    "agent-browser": {
+    "agent-smith-browser": {
       "command": "npx",
-      "args": ["-y", "agent-browser", "mcp"]
+      "args": ["-y", "--package", "agent-smith-browser", "asb", "mcp"]
     }
   }
 }
 ```
+
+The MCP server identifier is `agent-smith-browser`. Clients that show a title see **Agent Smith Browser**. `agent-browser mcp` starts the same server.
 
 Tools: `goto(url, settleMs?)`, `snapshot(settleMs?)` (text includes `hints`), `act(ref, kind, value?)`, `screenshot(fullPage?, settleMs?)`, `click_xy(x, y, space?)`, `attach(cdpUrl)`, `detach()`.
 
@@ -88,16 +99,17 @@ Call `attach("http://127.0.0.1:9222")` before `goto` when the site should see th
 Every command is one-shot (no daemon, no REPL, no session file). For multi-step flows use MCP.
 
 ```bash
-agent-browser demo                                  # example.com snapshot smoke
-agent-browser goto https://example.com
-agent-browser snapshot https://example.com
-agent-browser snapshot --cdp http://127.0.0.1:9222  # current tab of your Chrome
-agent-browser snapshot --cdp http://127.0.0.1:9222 --settle-ms 10000
-agent-browser act e3 click --cdp http://127.0.0.1:9222
-agent-browser screenshot https://example.com --out /tmp/page.png
-agent-browser click-xy 0.5 0.5 --space normalized --cdp http://127.0.0.1:9222
-agent-browser attach http://127.0.0.1:9222          # check endpoint is reachable
-agent-browser mcp                                   # MCP stdio server
+asb demo                                            # example.com snapshot smoke
+agent-browser demo                                  # same binary as asb
+asb goto https://example.com
+asb snapshot https://example.com
+asb snapshot --cdp http://127.0.0.1:9222            # current tab of your Chrome
+asb snapshot --cdp http://127.0.0.1:9222 --settle-ms 10000
+asb act e3 click --cdp http://127.0.0.1:9222
+asb screenshot https://example.com --out /tmp/page.png
+asb click-xy 0.5 0.5 --space normalized --cdp http://127.0.0.1:9222
+asb attach http://127.0.0.1:9222                    # check endpoint is reachable
+asb mcp                                             # MCP stdio server
 ```
 
 `--settle-ms` defaults to `0` (integer, max `30000`). On `snapshot <url>`, `screenshot <url>`, `click-xy` with a url, and `goto` it pauses after `domcontentloaded`. On a current-tab `snapshot`, `screenshot`, `click-xy`, or `act` it pauses before that command. `act` requires `--cdp`: it snapshots the attached tab, then acts. A managed one-shot would open a blank browser and exit. One-shot `click-xy` needs `--cdp` or a url.

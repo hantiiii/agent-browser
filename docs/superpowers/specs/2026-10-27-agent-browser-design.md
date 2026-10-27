@@ -1,5 +1,7 @@
 # Agent Browser — Design Spec
 
+> **Current name:** Agent Smith Browser (ASB). npm and GitHub are `agent-smith-browser`. CLI binaries are `asb` and `agent-browser`. This spec is the original design record.
+
 **Date:** 2026-10-27  
 **Status:** draft (browser decisions locked 2026-10-27; awaiting final approve)  
 **License (intended):** MIT  
@@ -175,4 +177,4 @@ Worth building only if we keep: smaller tool surface, token-budgeted a11y serial
 
 ## Appendix — example agent runtimes (non-normative)
 
-Examples of runtimes that can reach a user CDP port include local Node on the same machine, CI with a headed Chrome, or desktop agent products with a local machine bridge. None of these brands are required to use agent-browser.
+Examples of runtimes that can reach a user CDP port include local Node on the same machine, CI with a headed Chrome, or desktop agent products with a local machine bridge. None of these brands are required to use Agent Smith Browser.

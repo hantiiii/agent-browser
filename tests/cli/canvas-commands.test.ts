@@ -81,7 +81,7 @@ describe('CLI screenshot and click-xy', () => {
   });
 
   it('writes screenshot bytes and prints viewport JSON', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'agent-browser-test-'));
+    const dir = mkdtempSync(join(tmpdir(), 'asb-test-'));
     dirs.push(dir);
     const dest = join(dir, 'shot.png');
     const { calls, createSession } = stub();

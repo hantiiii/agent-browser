@@ -56,7 +56,13 @@ function formatClick(r: ClickXyResult): string {
 }
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: 'agent-browser', version });
+  const server = new McpServer({
+    name: 'agent-smith-browser',
+    title: 'Agent Smith Browser',
+    version,
+    description: 'Attach-first a11y+refs browser for AI agents, with advisory canvas hints (screenshot, click_xy, hints.mode).',
+    websiteUrl: 'https://github.com/hantiiii/agent-smith-browser',
+  });
 
   server.registerTool('goto', {
     description: 'Navigate the active page (waits for domcontentloaded, then optional settleMs). Invalidates refs; call snapshot next.',
@@ -150,7 +156,7 @@ export async function startServer(): Promise<void> {
 const entry = process.argv[1];
 if (entry && import.meta.url === pathToFileURL(entry).href) {
   startServer().catch((e) => {
-    process.stderr.write(`agent-browser mcp: ${e instanceof Error ? e.message : String(e)}\n`);
+    process.stderr.write(`asb mcp: ${e instanceof Error ? e.message : String(e)}\n`);
     process.exit(1);
   });
 }
