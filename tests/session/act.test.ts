@@ -27,6 +27,25 @@ describe('act semantics (managed)', () => {
     await expect(s.act({ ref: 'e99', kind: 'click' })).rejects.toThrow(/stale|snapshot first/i);
   });
 
+  it('click matches a button name that uses a non-breaking space', async () => {
+    const nbsp = `<!doctype html><meta charset="utf-8"><title>t</title>
+<button id="b">Save&nbsp;(1)&nbsp;now</button>
+<p id="out">none</p>
+<script>
+  document.getElementById('b').addEventListener('click', () => {
+    document.getElementById('out').textContent = 'clicked';
+  });
+</script>`;
+    s = new Session();
+    await s.goto('data:text/html,' + encodeURIComponent(nbsp));
+    const snap = await s.snapshot();
+    const btn = snap.nodes.find((n) => n.role === 'button')!;
+    expect(btn.name).toBe('Save (1) now');
+    await s.act({ ref: btn.ref, kind: 'click' });
+    const after = await s.snapshot();
+    expect(after.text).toContain('clicked');
+  });
+
   it('goto clears refs', async () => {
     s = new Session();
     await s.goto(url);

@@ -28,7 +28,7 @@ function fail(e: unknown): ToolResult {
 }
 
 const settleMsSchema = z.number().int().min(0).max(MAX_SETTLE_MS).optional().describe(
-  `Optional pause in ms (default 0, max ${MAX_SETTLE_MS}). Plain wait after domcontentloaded on goto, or before the tree is read on snapshot. Try 8000–10000 when the page is still a shell, spinner, or bot interstitial. Not networkidle, and not a bypass.`,
+  `Optional pause in ms (default 0, max ${MAX_SETTLE_MS}). Omit it for canvas and mixed clicks. Use 8000–10000 only when a SPA or bot interstitial is still a shell. Not a per-click paint wait and not networkidle.`,
 );
 
 /** Errors become plain text — message only, never a stack. */
@@ -42,11 +42,15 @@ async function run(fn: () => Promise<string>): Promise<ToolResult> {
 
 function formatShot(shot: ScreenshotResult): string {
   return [
+    `url: ${shot.url}`,
+    `pageChanged=${shot.pageChanged}`,
+    ...(shot.painted === undefined ? [] : [`painted=${shot.painted}`]),
     `viewport ${shot.viewport.width}x${shot.viewport.height} css px`,
     `image ${shot.image.width}x${shot.image.height} px`,
     `fullPage=${shot.fullPage}`,
     'click_xy uses css pixels from the viewport origin, or space=normalized (0-1).',
     'Viewport screenshots use one image pixel per CSS pixel. A fullPage image is not a click_xy map.',
+    'awaitPaint waits at most about 100ms for a canvas change. click_xy itself does not wait for paint.',
   ].join('\n');
 }
 
@@ -77,15 +81,15 @@ export function createServer(): McpServer {
   }));
 
   server.registerTool('snapshot', {
-    description: 'Compact accessibility tree of the active tab. Optional settleMs pauses before reading the tree. Interactive elements get refs e1, e2, … for act. Text ends with advisory hints (a11y | canvas | mixed | sparse) from live heuristics. Hints do not switch tools.',
+    description: 'Compact accessibility tree of the one active page. If the last act or click_xy opened a popup in the same browser context, this is that popup. Optional settleMs pauses before reading the tree. Interactive elements get refs e1, e2, … for act. Text ends with advisory hints (a11y | canvas | mixed | sparse) from live heuristics. Hints do not switch tools.',
     inputSchema: { settleMs: settleMsSchema },
   }, async ({ settleMs }) => run(async () => {
     const s = await session.snapshot({ settleMs });
-    return `url: ${s.url}\n${s.text}`;
+    return `url: ${s.url}\npageChanged=${s.pageChanged}\n${s.text}`;
   }));
 
   server.registerTool('act', {
-    description: 'Act on a ref from the last snapshot. click (no nav wait) | type (replaces value) | press (Playwright key name, e.g. Enter). Snapshot again if the page may have changed.',
+    description: 'Act on a ref from the last snapshot. click (no nav wait) | type (replaces value) | press (Playwright key name, e.g. Enter). Returns when the action is delivered; settle defaults to 0 and there is no paint wait. A popup opened by the action becomes the active page. Snapshot again if the page may have changed.',
     inputSchema: {
       ref: z.string().regex(/^e\d+$/).describe('Ref from last snapshot, e.g. e3'),
       kind: z.enum(['click', 'type', 'press']),
@@ -97,14 +101,15 @@ export function createServer(): McpServer {
   }));
 
   server.registerTool('screenshot', {
-    description: 'PNG of the active page. Default is the viewport at 1 image pixel per CSS pixel, so it maps to click_xy. fullPage captures the scrollable page and is not a click map. Does not replace snapshot/act and does not run vision.',
+    description: 'PNG of the active page. Default is the viewport at 1 image pixel per CSS pixel, so it maps to click_xy. fullPage captures the scrollable page and is not a click map. awaitPaint waits at most about 100ms for the largest canvas to change (or two frames when there is no canvas), then returns the shot either way. settleMs defaults to 0; omit it on canvas clicks. Does not replace snapshot/act and does not run vision.',
     inputSchema: {
       fullPage: z.boolean().optional().describe('Capture the full scrollable page. Default false (viewport only).'),
       settleMs: settleMsSchema,
+      awaitPaint: z.boolean().optional().describe('Wait up to about 100ms for a canvas change or two animation frames, then screenshot anyway. Default false.'),
     },
-  }, async ({ fullPage, settleMs }) => {
+  }, async ({ fullPage, settleMs, awaitPaint }) => {
     try {
-      const shot = await session.screenshot({ fullPage, settleMs });
+      const shot = await session.screenshot({ fullPage, settleMs, awaitPaint });
       return {
         content: [
           { type: 'text' as const, text: formatShot(shot) },
@@ -117,7 +122,7 @@ export function createServer(): McpServer {
   });
 
   server.registerTool('click_xy', {
-    description: 'Click a viewport point. Default space is css (pixels from the top-left). space=normalized takes x and y in 0–1. Response includes the viewport size and the CSS point clicked. Does not use a11y refs. Explicit tool: snapshot/act stay the default, and hints never call this for you.',
+    description: 'Click a viewport point and return as soon as the click is delivered. No default pause and no paint wait. Default space is css (pixels from the top-left). space=normalized takes x and y in 0–1. Response includes the viewport size and the CSS point clicked. A popup opened by the click becomes the active page. Does not use a11y refs. For a new canvas frame, call screenshot with awaitPaint. Explicit tool: snapshot/act stay the default, and hints never call this for you.',
     inputSchema: {
       x: z.number().describe('X in CSS pixels, or 0–1 when space is normalized'),
       y: z.number().describe('Y in CSS pixels, or 0–1 when space is normalized'),
