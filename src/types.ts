@@ -16,10 +16,55 @@ export type SnapshotNode = {
   states?: string[];
 };
 
+export type HintMode = 'a11y' | 'canvas' | 'mixed' | 'sparse';
+
+/** Advisory only. Callers choose screenshot / click_xy; the library does not switch. */
+export type SnapshotHints = {
+  mode: HintMode;
+  reasons: string[];
+};
+
 export type SnapshotResult = {
   text: string;
   nodes: SnapshotNode[];
   url: string;
+  hints: SnapshotHints;
+};
+
+export type ClickSpace = 'css' | 'normalized';
+
+export type ViewportSize = { width: number; height: number };
+
+/**
+ * Click a viewport point. `css` (default) is CSS pixels from the top-left of the viewport.
+ * `normalized` is a 0–1 fraction of that viewport (x=1 is the right edge).
+ */
+export type ClickXyArgs = {
+  x: number;
+  y: number;
+  space?: ClickSpace;
+};
+
+export type ClickXyResult = {
+  ok: true;
+  /** CSS pixels actually clicked, viewport origin. */
+  x: number;
+  y: number;
+  space: ClickSpace;
+  /** Coordinates as passed, before normalized values are converted. */
+  input: { x: number; y: number };
+  viewport: ViewportSize;
+};
+
+export type ScreenshotResult = {
+  ok: true;
+  bytes: Buffer;
+  mimeType: 'image/png';
+  fullPage: boolean;
+  /** CSS pixel viewport. click_xy uses this space. */
+  viewport: ViewportSize;
+  /** PNG pixel size. Viewport shots use CSS scale, so this matches `viewport` when fullPage is false. */
+  image: ViewportSize;
 };
 
 export class AgentBrowserError extends Error {

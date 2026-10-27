@@ -1,9 +1,23 @@
 import type { Locator, Page } from 'playwright';
 import { AgentBrowserError } from './types.js';
-import type { ActArgs, GotoResult, SessionMode, SnapshotNode, SnapshotResult } from './types.js';
+import type {
+  ActArgs,
+  ClickSpace,
+  ClickXyArgs,
+  ClickXyResult,
+  GotoResult,
+  ScreenshotResult,
+  SessionMode,
+  SnapshotHints,
+  SnapshotNode,
+  SnapshotResult,
+} from './types.js';
 import { serializeAxTree } from './a11y/serialize.js';
 import { getAxTree, launchManaged as defaultLaunch } from './backends/managed.js';
 import { connectAttach as defaultAttach } from './backends/attach.js';
+import { readCanvasGeometry, readViewport } from './geometry.js';
+import { classifySnapshotHints, countSnapshotLines, formatHints } from './hints.js';
+import { readPngSize } from './png.js';
 import { resolveSettleMs } from './settle.js';
 import type { Browser } from 'playwright';
 import type { BrowserHandle } from './backends/managed.js';
@@ -64,7 +78,87 @@ export class Session {
       this.locators.set(n.ref, loc.nth(idx));
     }
     this.lastSnapshotNodes = nodes;
-    return { text, nodes, url: page.url() };
+    const hints = await this.buildHints(page, text, nodes.length);
+    const withHints = text ? `${text}\n\n${formatHints(hints)}` : formatHints(hints);
+    return { text: withHints, nodes, url: page.url(), hints };
+  }
+
+  /**
+   * Hints are advisory. A geometry failure still returns a tree-only mode plus a reason.
+   * Nothing here calls screenshot or click_xy.
+   */
+  private async buildHints(page: Page, body: string, actionable: number): Promise<SnapshotHints> {
+    const total = countSnapshotLines(body);
+    let largestCoverage = 0;
+    let actionableOutsideCanvas = 0;
+    let note: string | undefined;
+    try {
+      const geometry = await readCanvasGeometry(page);
+      largestCoverage = geometry.largestCoverage;
+      actionableOutsideCanvas = geometry.actionableOutsideCanvas;
+    } catch (e) {
+      const raw = e instanceof Error ? e.message.split('\n')[0] : String(e);
+      note = `canvas metrics unavailable (${raw.slice(0, 180)})`;
+    }
+    const hints = classifySnapshotHints({
+      actionable,
+      total,
+      largestCoverage,
+      actionableOutsideCanvas,
+    });
+    if (!note) return hints;
+    return { mode: hints.mode, reasons: [...hints.reasons, note] };
+  }
+
+  /**
+   * Viewport PNG by default (one image pixel per CSS pixel). fullPage is the scrollable page
+   * and is not a click_xy coordinate map. Does not invalidate refs.
+   */
+  async screenshot(opts?: { fullPage?: boolean; settleMs?: number }): Promise<ScreenshotResult> {
+    const settleMs = resolveSettleMs(opts?.settleMs);
+    const page = await this.ensurePage();
+    if (settleMs > 0) await page.waitForTimeout(settleMs);
+    const fullPage = opts?.fullPage ?? false;
+    const viewport = await readViewport(page);
+    let bytes: Buffer;
+    try {
+      const shot = await page.screenshot({ type: 'png', fullPage, scale: 'css' });
+      bytes = Buffer.from(shot);
+    } catch (e) {
+      throw new AgentBrowserError(`screenshot failed: ${(e as Error).message}`);
+    }
+    return { ok: true, bytes, mimeType: 'image/png', fullPage, viewport, image: readPngSize(bytes) };
+  }
+
+  /**
+   * Click a viewport point. Does not require a snapshot or a ref.
+   * CSS pixels are the default. Normalized 0–1 values are scaled by the CSS viewport.
+   * Refs are cleared only when the click changes the document URL.
+   */
+  async clickXy(args: ClickXyArgs, opts?: { settleMs?: number }): Promise<ClickXyResult> {
+    const settleMs = resolveSettleMs(opts?.settleMs);
+    const page = await this.ensurePage();
+    if (settleMs > 0) await page.waitForTimeout(settleMs);
+    const viewport = await readViewport(page);
+    if (viewport.width <= 0 || viewport.height <= 0) {
+      throw new AgentBrowserError(`viewport is ${viewport.width}x${viewport.height}; cannot map click_xy`);
+    }
+    const space = resolveClickSpace(args.space);
+    if (!Number.isFinite(args.x) || !Number.isFinite(args.y)) {
+      throw new AgentBrowserError(
+        `click_xy x and y must be finite numbers; viewport is ${viewport.width}x${viewport.height}`,
+      );
+    }
+    const point = mapClick(space, args.x, args.y, viewport.width, viewport.height);
+    const urlBefore = page.url();
+    try {
+      await page.mouse.click(point.x, point.y);
+    } catch (e) {
+      if (e instanceof AgentBrowserError) throw e;
+      throw new AgentBrowserError(`click_xy failed: ${(e as Error).message}`);
+    }
+    if (page.url() !== urlBefore) this.invalidate();
+    return { ok: true, x: point.x, y: point.y, space, input: { x: args.x, y: args.y }, viewport };
   }
 
   async act(args: ActArgs): Promise<{ ok: true }> {
@@ -134,4 +228,37 @@ export class Session {
   async close(): Promise<void> {
     await this.detach();
   }
+}
+
+function resolveClickSpace(space: ClickSpace | undefined): ClickSpace {
+  if (space == null || space === 'css') return 'css';
+  if (space === 'normalized') return 'normalized';
+  throw new AgentBrowserError(`unknown click space ${String(space)}; use css or normalized`);
+}
+
+function roundPx(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function mapClick(
+  space: ClickSpace,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+): { x: number; y: number } {
+  if (space === 'normalized') {
+    if (x < 0 || x > 1 || y < 0 || y > 1) {
+      throw new AgentBrowserError(
+        `normalized x and y must be between 0 and 1; viewport is ${width}x${height} css px`,
+      );
+    }
+    return { x: roundPx(x * width), y: roundPx(y * height) };
+  }
+  if (x < 0 || y < 0 || x > width || y > height) {
+    throw new AgentBrowserError(
+      `css x,y must lie inside the viewport 0..${width} x 0..${height}; got ${x},${y}`,
+    );
+  }
+  return { x, y };
 }

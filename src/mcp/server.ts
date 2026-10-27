@@ -1,16 +1,31 @@
 #!/usr/bin/env node
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { Session } from '../session.js';
 import { MAX_SETTLE_MS } from '../settle.js';
+import type { ClickXyResult, ScreenshotResult } from '../types.js';
+
+const require = createRequire(import.meta.url);
+const { version } = require('../../package.json') as { version: string };
 
 /** One process-wide session shared by all tool calls. */
 const session = new Session();
 
-type ToolResult = { content: { type: 'text'; text: string }[]; isError?: boolean };
+type ToolContent =
+  | { type: 'text'; text: string }
+  | { type: 'image'; data: string; mimeType: string };
+
+type ToolResult = { content: ToolContent[]; isError?: boolean };
 
 const ok = (text: string): ToolResult => ({ content: [{ type: 'text', text }] });
+
+function fail(e: unknown): ToolResult {
+  const msg = e instanceof Error ? e.message.split('\n')[0] : String(e);
+  return { content: [{ type: 'text', text: `error: ${msg}` }], isError: true };
+}
 
 const settleMsSchema = z.number().int().min(0).max(MAX_SETTLE_MS).optional().describe(
   `Optional pause in ms (default 0, max ${MAX_SETTLE_MS}). Plain wait after domcontentloaded on goto, or before the tree is read on snapshot. Try 8000–10000 when the page is still a shell, spinner, or bot interstitial. Not networkidle, and not a bypass.`,
@@ -21,13 +36,27 @@ async function run(fn: () => Promise<string>): Promise<ToolResult> {
   try {
     return ok(await fn());
   } catch (e) {
-    const msg = e instanceof Error ? e.message.split('\n')[0] : String(e);
-    return { content: [{ type: 'text', text: `error: ${msg}` }], isError: true };
+    return fail(e);
   }
 }
 
+function formatShot(shot: ScreenshotResult): string {
+  return [
+    `viewport ${shot.viewport.width}x${shot.viewport.height} css px`,
+    `image ${shot.image.width}x${shot.image.height} px`,
+    `fullPage=${shot.fullPage}`,
+    'click_xy uses css pixels from the viewport origin, or space=normalized (0-1).',
+    'Viewport screenshots use one image pixel per CSS pixel. A fullPage image is not a click_xy map.',
+  ].join('\n');
+}
+
+function formatClick(r: ClickXyResult): string {
+  const input = r.space === 'css' ? '' : ` normalized (${r.input.x}, ${r.input.y}) ->`;
+  return `ok click_xy${input} css (${r.x}, ${r.y}) viewport ${r.viewport.width}x${r.viewport.height}`;
+}
+
 export function createServer(): McpServer {
-  const server = new McpServer({ name: 'agent-browser', version: '0.1.0' });
+  const server = new McpServer({ name: 'agent-browser', version });
 
   server.registerTool('goto', {
     description: 'Navigate the active page (waits for domcontentloaded, then optional settleMs). Invalidates refs; call snapshot next.',
@@ -42,7 +71,7 @@ export function createServer(): McpServer {
   }));
 
   server.registerTool('snapshot', {
-    description: 'Compact accessibility tree of the active tab. Optional settleMs pauses before reading the tree. Interactive elements get refs e1, e2, … for act.',
+    description: 'Compact accessibility tree of the active tab. Optional settleMs pauses before reading the tree. Interactive elements get refs e1, e2, … for act. Text ends with advisory hints (a11y | canvas | mixed | sparse) from live heuristics. Hints do not switch tools.',
     inputSchema: { settleMs: settleMsSchema },
   }, async ({ settleMs }) => run(async () => {
     const s = await session.snapshot({ settleMs });
@@ -60,6 +89,35 @@ export function createServer(): McpServer {
     await session.act({ ref, kind, value });
     return `ok ${kind} ${ref}`;
   }));
+
+  server.registerTool('screenshot', {
+    description: 'PNG of the active page. Default is the viewport at 1 image pixel per CSS pixel, so it maps to click_xy. fullPage captures the scrollable page and is not a click map. Does not replace snapshot/act and does not run vision.',
+    inputSchema: {
+      fullPage: z.boolean().optional().describe('Capture the full scrollable page. Default false (viewport only).'),
+      settleMs: settleMsSchema,
+    },
+  }, async ({ fullPage, settleMs }) => {
+    try {
+      const shot = await session.screenshot({ fullPage, settleMs });
+      return {
+        content: [
+          { type: 'text' as const, text: formatShot(shot) },
+          { type: 'image' as const, data: shot.bytes.toString('base64'), mimeType: 'image/png' },
+        ],
+      };
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  server.registerTool('click_xy', {
+    description: 'Click a viewport point. Default space is css (pixels from the top-left). space=normalized takes x and y in 0–1. Response includes the viewport size and the CSS point clicked. Does not use a11y refs. Explicit tool: snapshot/act stay the default, and hints never call this for you.',
+    inputSchema: {
+      x: z.number().describe('X in CSS pixels, or 0–1 when space is normalized'),
+      y: z.number().describe('Y in CSS pixels, or 0–1 when space is normalized'),
+      space: z.enum(['css', 'normalized']).optional().describe('css (default) or normalized (0–1 of the viewport)'),
+    },
+  }, async ({ x, y, space }) => run(async () => formatClick(await session.clickXy({ x, y, space }))));
 
   server.registerTool('attach', {
     description: "Attach to the user's running Chrome/Edge via CDP (http://127.0.0.1:9222 or ws://…). Closes managed browser first. High trust: full control of that browser session.",
@@ -80,7 +138,7 @@ export function createServer(): McpServer {
   return server;
 }
 
-async function main() {
+export async function startServer(): Promise<void> {
   const server = createServer();
   await server.connect(new StdioServerTransport());
   const shutdown = async () => { await session.close().catch(() => {}); process.exit(0); };
@@ -89,7 +147,10 @@ async function main() {
   process.stdin.on('close', shutdown);
 }
 
-main().catch((e) => {
-  process.stderr.write(`agent-browser mcp: ${e instanceof Error ? e.message : String(e)}\n`);
-  process.exit(1);
-});
+const entry = process.argv[1];
+if (entry && import.meta.url === pathToFileURL(entry).href) {
+  startServer().catch((e) => {
+    process.stderr.write(`agent-browser mcp: ${e instanceof Error ? e.message : String(e)}\n`);
+    process.exit(1);
+  });
+}

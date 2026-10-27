@@ -20,6 +20,8 @@ function stub() {
       calls.push(['act', args]);
       return { ok: true };
     },
+    screenshot: async () => { throw new Error('screenshot not stubbed'); },
+    clickXy: async () => { throw new Error('clickXy not stubbed'); },
     close: async () => { calls.push(['close']); },
   };
   return { calls, createSession: () => session };
