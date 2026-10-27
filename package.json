@@ -1,7 +1,7 @@
 {
   "name": "agent-smith-browser",
   "version": "0.2.0",
-  "description": "Agent Smith Browser (ASB) — attach-first a11y+refs browser for AI agents. Real Chrome/Edge over CDP, MCP + CLI. Advisory canvas hints.",
+  "description": "Agent Smith Browser (ASB) — attach to the user's own Chrome or Edge on their computer (CDP) and drive that session. A11y refs, MCP + CLI. Managed Chromium is the example.com demo. Advisory canvas hints.",
   "type": "module",
   "license": "MIT",
   "repository": {
