@@ -33,5 +33,7 @@ describe('MCP tools', () => {
     expect(tools.attach?.description).toMatch(/loopback/);
     expect(tools.attach?.description).toMatch(/Remote hosts are refused/);
     expect(tools.attach?.description).toMatch(/first open tab/);
+    expect(tools.click_xy?.description).toMatch(/popupNotFollowed/);
+    expect(tools.act?.description).toMatch(/different origin/);
   });
 });
