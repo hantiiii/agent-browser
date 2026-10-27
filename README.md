@@ -96,6 +96,13 @@ npm test                                   # unit + managed integration
 ATTACH_CDP_URL=http://127.0.0.1:9222 npx vitest run tests/integration/attach.test.ts   # optional attach smoke
 ```
 
+## Support development
+
+If this helps your agent stack, consider supporting development.
+
+**BTC Donation Address:**
+`1HANfVCfy9CFp5JAjNBhKWPWbavjXxdCRR`
+
 ## License
 
 MIT
