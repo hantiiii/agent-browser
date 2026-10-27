@@ -1,4 +1,4 @@
-import type { BrowserContext, Locator, Page } from 'playwright';
+import type { Browser, BrowserContext, Locator, Page } from 'playwright';
 import { AgentBrowserError } from './types.js';
 import type {
   ActArgs,
@@ -19,8 +19,9 @@ import { readCanvasGeometry, readViewport } from './geometry.js';
 import { classifySnapshotHints, countSnapshotLines, formatHints } from './hints.js';
 import { readPngSize } from './png.js';
 import { resolveSettleMs } from './settle.js';
-import type { Browser } from 'playwright';
 import type { BrowserHandle } from './backends/managed.js';
+import { installOpenHook } from './open-signal.js';
+import { PAINT_CAP_MS, waitForPaint } from './paint.js';
 
 export type SessionDeps = {
   launchManaged?: () => Promise<BrowserHandle>;
@@ -34,6 +35,13 @@ export class Session {
   lastSnapshotNodes: SnapshotNode[] | null = null;
   private locators = new Map<string, Locator>();
   private handle: Handle | null = null;
+  /** Pages whose current document already has the open hook. */
+  private hookedPages = new WeakSet<Page>();
+  private hookListeners = new WeakSet<Page>();
+  private hookedContexts = new WeakSet<BrowserContext>();
+  /** Incremented from the page when a gesture calls window.open or activates target=_blank. */
+  private openSignals = 0;
+  private observed: { page: Page; url: string } | null = null;
   constructor(private deps: SessionDeps = {}) {}
 
   private invalidate() {
@@ -85,7 +93,7 @@ export class Session {
     this.lastSnapshotNodes = nodes;
     const hints = await this.buildHints(page, text, nodes.length);
     const withHints = text ? `${text}\n\n${formatHints(hints)}` : formatHints(hints);
-    return { text: withHints, nodes, url: page.url(), hints };
+    return { text: withHints, nodes, url: page.url(), hints, pageChanged: this.markObservation(page) };
   }
 
   /**
@@ -119,10 +127,11 @@ export class Session {
    * Viewport PNG by default (one image pixel per CSS pixel). fullPage is the scrollable page
    * and is not a click_xy coordinate map. Does not invalidate refs.
    */
-  async screenshot(opts?: { fullPage?: boolean; settleMs?: number }): Promise<ScreenshotResult> {
+  async screenshot(opts?: { fullPage?: boolean; settleMs?: number; awaitPaint?: boolean }): Promise<ScreenshotResult> {
     const settleMs = resolveSettleMs(opts?.settleMs);
     const page = await this.ensurePage();
     if (settleMs > 0) await page.waitForTimeout(settleMs);
+    const painted = opts?.awaitPaint ? await waitForPaint(page, PAINT_CAP_MS) : undefined;
     const fullPage = opts?.fullPage ?? false;
     const viewport = await readViewport(page);
     let bytes: Buffer;
@@ -132,12 +141,23 @@ export class Session {
     } catch (e) {
       throw new AgentBrowserError(`screenshot failed: ${(e as Error).message}`);
     }
-    return { ok: true, bytes, mimeType: 'image/png', fullPage, viewport, image: readPngSize(bytes) };
+    return {
+      ok: true,
+      bytes,
+      mimeType: 'image/png',
+      fullPage,
+      viewport,
+      image: readPngSize(bytes),
+      url: page.url(),
+      pageChanged: this.markObservation(page),
+      ...(painted === undefined ? {} : { painted }),
+    };
   }
 
   /**
    * Click a viewport point. Does not require a snapshot or a ref.
    * CSS pixels are the default. Normalized 0–1 values are scaled by the CSS viewport.
+   * Returns when the click is delivered. It does not wait for paint.
    * Refs are cleared when the click changes the document URL or opens a new page.
    */
   async clickXy(args: ClickXyArgs, opts?: { settleMs?: number }): Promise<ClickXyResult> {
@@ -203,30 +223,71 @@ export class Session {
   /**
    * Follow a popup or new page created by this action in the same browser context.
    * Tabs that were already open stay put. There is still one active page afterward.
+   * A click that does not open a window returns with the click. The short cap runs
+   * only after the page reports window.open or a target=_blank activation.
    */
   private async runFollowingPopup(page: Page, action: () => Promise<void>): Promise<void> {
+    await this.ensureOpenHook(page);
     const context = page.context();
     const before = new Set(context.pages());
+    const signalsBefore = this.openSignals;
     let newest: Page | undefined;
+    let resolveWait: (() => void) | undefined;
     const note = (next: Page) => {
-      if (!before.has(next)) newest = next;
+      if (before.has(next)) return;
+      newest = next;
+      resolveWait?.();
     };
     context.on('page', note);
     page.on('popup', note);
     try {
       await action();
-      // The page event can land just after the click promise resolves.
-      if (!openedPage(context, before, newest)) {
-        const deadline = Date.now() + POPUP_GRACE_MS;
-        while (Date.now() < deadline && !openedPage(context, before, newest)) {
-          await new Promise((resolve) => setTimeout(resolve, 15));
-        }
+      const inFlight = this.openSignals !== signalsBefore;
+      if (!openedPage(context, before, newest) && inFlight) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, POPUP_FOLLOW_CAP_MS);
+          resolveWait = () => {
+            clearTimeout(timer);
+            resolve();
+          };
+          if (openedPage(context, before, newest)) resolveWait();
+        });
       }
     } finally {
       context.off('page', note);
       page.off('popup', note);
+      resolveWait = undefined;
     }
     await this.adoptOpenedPage(context, before, newest);
+  }
+
+  private async ensureOpenHook(page: Page): Promise<void> {
+    const context = page.context();
+    if (!this.hookedContexts.has(context)) {
+      await context.exposeBinding('__asbNotifyOpen', () => {
+        this.openSignals += 1;
+      });
+      await context.addInitScript(installOpenHook);
+      this.hookedContexts.add(context);
+    }
+    if (!this.hookListeners.has(page)) {
+      this.hookListeners.add(page);
+      page.on('framenavigated', (frame) => {
+        if (frame === page.mainFrame()) this.hookedPages.delete(page);
+      });
+    }
+    if (this.hookedPages.has(page)) return;
+    await page.evaluate(installOpenHook);
+    this.hookedPages.add(page);
+  }
+
+  /** True when this page or its URL differs from the previous snapshot or screenshot. */
+  private markObservation(page: Page): boolean {
+    const url = page.url();
+    const prev = this.observed;
+    const pageChanged = prev !== null && (prev.page !== page || prev.url !== url);
+    this.observed = { page, url };
+    return pageChanged;
   }
 
   private async adoptOpenedPage(context: BrowserContext, before: Set<Page>, newest: Page | undefined): Promise<void> {
@@ -258,6 +319,7 @@ export class Session {
     const mode = this.mode;
     this.handle = null;
     this.mode = 'idle';
+    this.observed = null;
     this.invalidate();
     if (h) await this.release(h, mode);
     return { ok: true };
@@ -277,8 +339,11 @@ export class Session {
   }
 }
 
-/** How long to watch for a popup the click already started. No-popup actions pay this wait. */
-const POPUP_GRACE_MS = 200;
+/**
+ * Backstop after the page has already reported an open. Headless window.open
+ * lands in a few milliseconds; target=_blank a little later. No-popup clicks do not wait.
+ */
+const POPUP_FOLLOW_CAP_MS = 80;
 
 function openedPage(context: BrowserContext, before: Set<Page>, newest: Page | undefined): Page | undefined {
   if (newest && !newest.isClosed()) return newest;

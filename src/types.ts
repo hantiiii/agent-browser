@@ -29,6 +29,8 @@ export type SnapshotResult = {
   nodes: SnapshotNode[];
   url: string;
   hints: SnapshotHints;
+  /** True when this read is a different page or URL than the previous snapshot or screenshot. */
+  pageChanged: boolean;
 };
 
 export type ClickSpace = 'css' | 'normalized';
@@ -65,6 +67,14 @@ export type ScreenshotResult = {
   viewport: ViewportSize;
   /** PNG pixel size. Viewport shots use CSS scale, so this matches `viewport` when fullPage is false. */
   image: ViewportSize;
+  url: string;
+  /** True when this shot is a different page or URL than the previous snapshot or screenshot. */
+  pageChanged: boolean;
+  /**
+   * Set only when `awaitPaint` was requested.
+   * True when the canvas sample changed, or two frames ran on a page with no canvas, before the cap.
+   */
+  painted?: boolean;
 };
 
 export class AgentBrowserError extends Error {

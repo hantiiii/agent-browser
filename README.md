@@ -28,7 +28,7 @@ Managed Chromium is appropriate for simple sites. For hardened marketplaces, att
 3. If the page may have changed, `snapshot` again before the next action. A click (`act` or `click_xy`) that opens a popup (`window.open`, `target=_blank`) moves the session onto that new page when it appears in the same browser context. The next snapshot reads the popup.
 4. Read the `hints` line on that snapshot. It does not change the loop. For `canvas` or `mixed`, see **Canvas, mixed, and sparse pages**.
 
-`goto` still returns at `domcontentloaded`. On a SPA or a bot interstitial, pass a settle pause before you trust the tree: CLI `--settle-ms <n>` (on `goto`, `snapshot`, `screenshot`, `click-xy`, or `act`) or MCP `settleMs` on `goto`, `snapshot`, and `screenshot`. Default is `0`, so example.com stays fast. `8000`–`10000` matched the Booking, eBay, and Airbnb attach checks above. The maximum is `30000`. With `snapshot <url>`, the pause happens once, after navigation. On an already open attached tab, it happens before the tree is read. Settle is a plain wait added on top of `domcontentloaded`. It is not `networkidle`, and it does not defeat a challenge by itself.
+`goto` still returns at `domcontentloaded`. On a SPA or a bot interstitial, pass a settle pause before you trust the tree: CLI `--settle-ms <n>` (on `goto`, `snapshot`, `screenshot`, `click-xy`, or `act`) or MCP `settleMs` on `goto`, `snapshot`, and `screenshot`. Default is `0` on every one of those calls, including `click_xy` and `act` click/press, so a canvas loop stays fast when you omit it. `8000`–`10000` matched the Booking, eBay, and Airbnb attach checks above. The maximum is `30000`. With `snapshot <url>`, the pause happens once, after navigation. On an already open attached tab, it happens before the tree is read. On one-shot `act`, `--settle-ms` pauses the snapshot before the action, not after the click. Settle is a plain wait added on top of `domcontentloaded`. It is not `networkidle`, and it does not defeat a challenge by itself. Do not pass it on each dice click.
 
 Refs from the last successful snapshot stop being valid after any of:
 
@@ -61,6 +61,10 @@ Hints come from the live accessibility tree and from canvas boxes in the open pa
 
 When the mode is `canvas` or `mixed`, call `screenshot` and `click_xy` yourself. The default screenshot is the viewport, one PNG pixel per CSS pixel, so it lines up with `click_xy`. `click_xy` defaults to CSS pixels from the top-left of the viewport. `space: "normalized"` (CLI `--space normalized`) takes `x` and `y` in the 0–1 range. Both responses include the viewport size. `--full` / `fullPage: true` captures the scrollable page and is not a coordinate map for `click_xy`.
 
+Canvas and mixed loops omit `settleMs`. `click_xy` returns as soon as the click is delivered and does not sleep for the next paint. Take the next screenshot immediately. If you need the new frame, pass `awaitPaint: true` (CLI `--await-paint`): the screenshot waits at most about 100ms for the largest canvas to change, or for two animation frames when the page has no canvas, then returns the image either way. The result includes `painted` (`true` when that change or those frames were seen). A multi-second sleep between dice clicks is the slow path. A large `settleMs` is only for a SPA shell or a bot interstitial that has not drawn a tree yet.
+
+`snapshot` and `screenshot` include `url` and `pageChanged`. `pageChanged` is true when this read is a different page or URL than the previous snapshot or screenshot in the same session, which is what you see after a click opens a popup.
+
 ## Install
 
 ```bash
@@ -92,7 +96,7 @@ Requires Node 20+.
 
 The MCP server identifier is `agent-smith-browser`. Clients that show a title see **Agent Smith Browser**. `agent-browser mcp` starts the same server.
 
-Tools: `goto(url, settleMs?)`, `snapshot(settleMs?)` (text includes `hints`), `act(ref, kind, value?)`, `screenshot(fullPage?, settleMs?)`, `click_xy(x, y, space?)`, `attach(cdpUrl)`, `detach()`.
+Tools: `goto(url, settleMs?)`, `snapshot(settleMs?)` (text includes `hints`), `act(ref, kind, value?)`, `screenshot(fullPage?, settleMs?, awaitPaint?)`, `click_xy(x, y, space?)`, `attach(cdpUrl)`, `detach()`. `settleMs` defaults to 0. `click_xy` has no paint wait.
 
 Call `attach("http://127.0.0.1:9222")` before `goto` when the site should see the user's real browser. Otherwise the first `goto` or `snapshot` launches managed Chromium. Pass `settleMs` when the tree would otherwise be read too early. See **How agents should loop** for ref lifetime, settle, and the one active page (including a popup a click just opened).
 

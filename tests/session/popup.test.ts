@@ -46,11 +46,13 @@ describe('popup follow', () => {
     session = new Session();
     await session.goto(`${site.origin}/`);
     const snap = await session.snapshot();
+    expect(snap.pageChanged).toBe(false);
     const btn = snap.nodes.find((n) => n.role === 'button' && n.name === 'Open lobby');
     expect(btn).toBeTruthy();
     await session.act({ ref: btn!.ref, kind: 'click' });
     await expect(session.act({ ref: btn!.ref, kind: 'click' })).rejects.toThrow(/snapshot first/i);
     const after = await session.snapshot();
+    expect(after.pageChanged).toBe(true);
     expect(after.url).toContain('/lobby');
     expect(after.text).toContain('lobby-marker');
     expect(after.nodes.some((n) => n.role === 'button' && n.name === 'Seat')).toBe(true);
@@ -99,7 +101,51 @@ describe('popup follow', () => {
     await session.clickXy({ x: 20, y: 20 });
     await expect(session.act({ ref: btn!.ref, kind: 'click' })).rejects.toThrow(/snapshot first/i);
     const after = await session.snapshot();
+    expect(after.pageChanged).toBe(true);
     expect(after.url).toContain('/lobby');
     expect(after.text).toContain('lobby-marker');
+    const again = await session.snapshot();
+    expect(again.pageChanged).toBe(false);
+  });
+
+  it('click_xy on a target=_blank link follows that page', async () => {
+    const blank = `<!doctype html><title>opener</title>
+<a href="/lobby" target="_blank" style="position:fixed;inset:0;display:block">Open lobby</a>`;
+    const site = await serve({ '/': blank, '/lobby': lobby });
+    close = site.close;
+    session = new Session();
+    await session.goto(`${site.origin}/`);
+    await session.snapshot();
+    await session.clickXy({ x: 30, y: 30 });
+    const after = await session.snapshot();
+    expect(after.pageChanged).toBe(true);
+    expect(after.url).toContain('/lobby');
+    expect(after.text).toContain('lobby-marker');
+  });
+
+  it('same-page click_xy does not wait out a popup grace', async () => {
+    const hold = `<!doctype html><title>dice</title>
+<style>html, body { margin: 0; }</style>
+<button id="b" style="position:fixed;inset:0">Hold</button>
+<p id="n">0</p>
+<script>
+  document.getElementById('b').addEventListener('click', () => {
+    const el = document.getElementById('n');
+    el.textContent = String(Number(el.textContent) + 1);
+  });
+</script>`;
+    const site = await serve({ '/': hold });
+    close = site.close;
+    session = new Session();
+    await session.goto(`${site.origin}/`);
+    const clicks = 6;
+    const started = performance.now();
+    for (let i = 0; i < clicks; i++) await session.clickXy({ x: 40, y: 40 });
+    const elapsed = performance.now() - started;
+    const after = await session.snapshot();
+    expect(after.text).toContain(String(clicks));
+    expect(after.url).toBe(`${site.origin}/`);
+    // A fixed 200ms grace would put six clicks over a second.
+    expect(elapsed).toBeLessThan(500);
   });
 });

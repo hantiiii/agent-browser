@@ -24,9 +24,10 @@ Usage (every command is one-shot: no daemon, no REPL, no session file):
                                             Print a11y snapshot (optionally goto url first)
   ${CLI} act <ref> <click|type|press> [value] --cdp <url> [--settle-ms <n>]
                                             Snapshot the attached tab, then act on <ref>
-  ${CLI} screenshot [url] [--cdp <url>] [--full] [--out <path>] [--settle-ms <n>]
+  ${CLI} screenshot [url] [--cdp <url>] [--full] [--await-paint] [--out <path>] [--settle-ms <n>]
                                             Viewport PNG (1 image px per CSS px). Prints JSON path + viewport.
                                             --full captures the scrollable page (not a click-xy map).
+                                            --await-paint waits at most about 100ms for a canvas change, then returns the shot.
   ${CLI} click-xy <x> <y> [--space css|normalized] [--cdp <url>] [url] [--settle-ms <n>]
                                             Click viewport coordinates. css pixels (default) or 0–1 normalized.
                                             Prints the CSS point clicked and the viewport size.
@@ -36,10 +37,11 @@ Usage (every command is one-shot: no daemon, no REPL, no session file):
 
 --settle-ms <n>   Extra pause after domcontentloaded (goto / snapshot <url> / screenshot <url> / click-xy with a url / demo)
                   or before the open tab is read (snapshot, screenshot, click-xy, and act).
-                  Integer 0–${MAX_SETTLE_MS}. Default 0, so simple pages stay fast.
+                  Integer 0–${MAX_SETTLE_MS}. Default 0. Omit it on canvas and mixed clicks.
+                  click-xy returns when the click is delivered; it does not wait for paint.
                   Try 8000–10000 when the tree is empty, thin, or a bot interstitial.
                   This is a plain wait. Navigation stays domcontentloaded, not networkidle.
-                  It does not bypass bot checks.
+                  It does not bypass bot checks. It is not a per-dice pause.
 
 --cdp attaches to YOUR running Chrome/Edge (started with
   --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222).
@@ -57,9 +59,9 @@ a11y snapshot + act stays the default.`;
 type SessionLike = {
   attach(cdpUrl: string): Promise<unknown>;
   goto(url: string, opts?: { settleMs?: number }): Promise<unknown>;
-  snapshot(opts?: { settleMs?: number }): Promise<{ text: string; url: string }>;
+  snapshot(opts?: { settleMs?: number }): Promise<{ text: string; url: string; pageChanged?: boolean }>;
   act(args: { ref: string; kind: ActKind; value?: string }): Promise<unknown>;
-  screenshot(opts?: { fullPage?: boolean; settleMs?: number }): Promise<ScreenshotResult>;
+  screenshot(opts?: { fullPage?: boolean; settleMs?: number; awaitPaint?: boolean }): Promise<ScreenshotResult>;
   clickXy(args: { x: number; y: number; space?: ClickSpace }, opts?: { settleMs?: number }): Promise<ClickXyResult>;
   close(): Promise<void>;
 };
@@ -146,7 +148,8 @@ export async function main(argv: string[], deps: CliDeps = {}) {
         // One pause: after navigation when a url is given, otherwise before reading the open tab.
         if (url) await s.goto(url, settleOpt);
         const r = await s.snapshot(url ? undefined : settleOpt);
-        console.log(`url: ${r.url}\n${r.text}`);
+        const changed = typeof r.pageChanged === 'boolean' ? `pageChanged=${r.pageChanged}\n` : '';
+        console.log(`url: ${r.url}\n${changed}${r.text}`);
       });
       return;
     case 'act': {
@@ -162,11 +165,16 @@ export async function main(argv: string[], deps: CliDeps = {}) {
     }
     case 'screenshot': {
       const fullPage = takeBool(args, '--full');
+      const awaitPaint = takeBool(args, '--await-paint');
       const outPath = takeFlag(args, '--out');
       await withSession(cdp, async (s) => {
         const url = args[0];
         if (url) await s.goto(url, settleOpt);
-        const shot = await s.screenshot({ fullPage, settleMs: url ? undefined : settleMs });
+        const shot = await s.screenshot({
+          fullPage,
+          settleMs: url ? undefined : settleMs,
+          ...(awaitPaint ? { awaitPaint: true } : {}),
+        });
         const path = outPath ?? join(tmpdir(), `asb-${randomBytes(8).toString('hex')}.png`);
         writeFileSync(path, shot.bytes);
         const { bytes, ...rest } = shot;
