@@ -1,7 +1,7 @@
 {
   "name": "agent-browser",
   "version": "0.1.0",
-  "description": "Thin a11y+refs browser for AI agents (MCP + CLI)",
+  "description": "Attach-first a11y+refs browser for AI agents: real Chrome/Edge over CDP, MCP + CLI.",
   "type": "module",
   "license": "MIT",
   "bin": {
