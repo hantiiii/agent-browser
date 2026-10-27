@@ -1,7 +1,11 @@
+import { randomBytes } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Session } from './session.js';
 import { parseSettleMsFlag, MAX_SETTLE_MS } from './settle.js';
-import type { ActKind } from './types.js';
+import type { ActKind, ClickSpace, ClickXyResult, ScreenshotResult } from './types.js';
 
 const HELP = `agent-browser — a11y snapshot + refs browser for AI agents
 
@@ -14,11 +18,18 @@ Usage (every command is one-shot: no daemon, no REPL, no session file):
                                             Print a11y snapshot (optionally goto url first)
   agent-browser act <ref> <click|type|press> [value] --cdp <url> [--settle-ms <n>]
                                             Snapshot the attached tab, then act on <ref>
+  agent-browser screenshot [url] [--cdp <url>] [--full] [--out <path>] [--settle-ms <n>]
+                                            Viewport PNG (1 image px per CSS px). Prints JSON path + viewport.
+                                            --full captures the scrollable page (not a click-xy map).
+  agent-browser click-xy <x> <y> [--space css|normalized] [--cdp <url>] [url] [--settle-ms <n>]
+                                            Click viewport coordinates. css pixels (default) or 0–1 normalized.
+                                            Prints the CSS point clicked and the viewport size.
+                                            One-shot needs --cdp or a url. Alias: click_xy.
   agent-browser attach <cdpUrl>             Check that a Chrome/Edge CDP endpoint is reachable
   agent-browser detach                      No-op in one-shot CLI (nothing persists)
 
---settle-ms <n>   Extra pause after domcontentloaded (goto / snapshot <url> / demo)
-                  or before the snapshot (snapshot of the current tab, and act).
+--settle-ms <n>   Extra pause after domcontentloaded (goto / snapshot <url> / screenshot <url> / click-xy with a url / demo)
+                  or before the open tab is read (snapshot, screenshot, click-xy, and act).
                   Integer 0–${MAX_SETTLE_MS}. Default 0, so simple pages stay fast.
                   Try 8000–10000 when the tree is empty, thin, or a bot interstitial.
                   This is a plain wait. Navigation stays domcontentloaded, not networkidle.
@@ -30,13 +41,20 @@ Usage (every command is one-shot: no daemon, no REPL, no session file):
   (cookies, logged-in sessions, input). Only attach to a browser you are OK handing over.
 
 Managed one-shots start a fresh browser and close it on exit, so state does not carry
-between commands. For multi-step flows use "agent-browser mcp".`;
+between commands. For multi-step flows use "agent-browser mcp".
+
+Snapshot text ends with a hints JSON line: mode a11y | canvas | mixed | sparse.
+Hints are advisory and do not switch tools. They are live page heuristics, not a
+site list. When mode is canvas or mixed, use screenshot and click-xy.
+a11y snapshot + act stays the default.`;
 
 type SessionLike = {
   attach(cdpUrl: string): Promise<unknown>;
   goto(url: string, opts?: { settleMs?: number }): Promise<unknown>;
   snapshot(opts?: { settleMs?: number }): Promise<{ text: string; url: string }>;
   act(args: { ref: string; kind: ActKind; value?: string }): Promise<unknown>;
+  screenshot(opts?: { fullPage?: boolean; settleMs?: number }): Promise<ScreenshotResult>;
+  clickXy(args: { x: number; y: number; space?: ClickSpace }, opts?: { settleMs?: number }): Promise<ClickXyResult>;
   close(): Promise<void>;
 };
 
@@ -53,6 +71,25 @@ function takeFlag(args: string[], name: string): string | undefined {
   if (!v) throw new Error(`${name} needs a value`);
   args.splice(i, 2);
   return v;
+}
+
+function takeBool(args: string[], name: string): boolean {
+  const i = args.indexOf(name);
+  if (i === -1) return false;
+  args.splice(i, 1);
+  return true;
+}
+
+function parseNumber(raw: string, label: string): number {
+  if (!/^-?(?:\d+\.?\d*|\.\d+)$/.test(raw)) throw new Error(`${label} must be a number`);
+  const n = Number(raw);
+  if (!Number.isFinite(n)) throw new Error(`${label} must be a number`);
+  return n;
+}
+
+function parseSpace(raw: string): ClickSpace {
+  if (raw === 'css' || raw === 'normalized') return raw;
+  throw new Error('--space must be css or normalized');
 }
 
 export async function main(argv: string[], deps: CliDeps = {}) {
@@ -80,9 +117,11 @@ export async function main(argv: string[], deps: CliDeps = {}) {
   }
 
   switch (cmd) {
-    case 'mcp':
-      await import('./mcp/server.js');
+    case 'mcp': {
+      const { startServer } = await import('./mcp/server.js');
+      await startServer();
       return;
+    }
     case 'demo':
       await withSession(undefined, async (s) => {
         await s.goto('https://example.com', settleOpt);
@@ -112,6 +151,39 @@ export async function main(argv: string[], deps: CliDeps = {}) {
       out(await withSession(cdp, async (s) => {
         await s.snapshot(settleOpt);
         return s.act({ ref, kind: kind as ActKind, value });
+      }));
+      return;
+    }
+    case 'screenshot': {
+      const fullPage = takeBool(args, '--full');
+      const outPath = takeFlag(args, '--out');
+      await withSession(cdp, async (s) => {
+        const url = args[0];
+        if (url) await s.goto(url, settleOpt);
+        const shot = await s.screenshot({ fullPage, settleMs: url ? undefined : settleMs });
+        const path = outPath ?? join(tmpdir(), `agent-browser-${randomBytes(8).toString('hex')}.png`);
+        writeFileSync(path, shot.bytes);
+        const { bytes, ...rest } = shot;
+        out({ ...rest, path, byteLength: bytes.length });
+      });
+      return;
+    }
+    case 'click-xy':
+    case 'click_xy': {
+      const spaceRaw = takeFlag(args, '--space');
+      const space = spaceRaw === undefined ? undefined : parseSpace(spaceRaw);
+      const [xRaw, yRaw, url] = args;
+      if (xRaw === undefined || yRaw === undefined) {
+        throw new Error('usage: agent-browser click-xy <x> <y> [--space css|normalized] [--cdp <url>] [url]');
+      }
+      if (!cdp && !url) {
+        throw new Error('one-shot click-xy needs --cdp <url> or a page url (a managed browser would be blank). For multi-step use "agent-browser mcp".');
+      }
+      const x = parseNumber(xRaw, 'x');
+      const y = parseNumber(yRaw, 'y');
+      out(await withSession(cdp, async (s) => {
+        if (url) await s.goto(url, settleOpt);
+        return s.clickXy({ x, y, space }, url ? undefined : settleOpt);
       }));
       return;
     }
