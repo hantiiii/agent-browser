@@ -19,6 +19,7 @@ import { readCanvasGeometry, readViewport } from './geometry.js';
 import { classifySnapshotHints, countSnapshotLines, formatHints } from './hints.js';
 import { readPngSize } from './png.js';
 import { resolveSettleMs } from './settle.js';
+import { assertNavigableUrl } from './url-policy.js';
 import type { BrowserHandle } from './backends/managed.js';
 import { installOpenHook } from './open-signal.js';
 import { PAINT_CAP_MS, waitForPaint } from './paint.js';
@@ -58,11 +59,12 @@ export class Session {
   }
 
   async goto(url: string, opts?: { settleMs?: number }): Promise<GotoResult> {
+    const navigable = assertNavigableUrl(url);
     const settleMs = resolveSettleMs(opts?.settleMs);
     const page = await this.ensurePage();
     this.invalidate();
     try {
-      await page.goto(url, { waitUntil: 'domcontentloaded' });
+      await page.goto(navigable, { waitUntil: 'domcontentloaded' });
       if (settleMs > 0) await page.waitForTimeout(settleMs);
       return { ok: true, url: page.url() };
     } catch (e) {
