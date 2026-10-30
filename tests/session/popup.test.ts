@@ -49,7 +49,9 @@ describe('popup follow', () => {
     expect(snap.pageChanged).toBe(false);
     const btn = snap.nodes.find((n) => n.role === 'button' && n.name === 'Open lobby');
     expect(btn).toBeTruthy();
-    await session.act({ ref: btn!.ref, kind: 'click' });
+    const acted = await session.act({ ref: btn!.ref, kind: 'click' });
+    expect(acted.popup?.followed).toBe(true);
+    expect(acted.popup?.url).toContain('/lobby');
     await expect(session.act({ ref: btn!.ref, kind: 'click' })).rejects.toThrow(/snapshot first/i);
     const after = await session.snapshot();
     expect(after.pageChanged).toBe(true);
@@ -121,6 +123,37 @@ describe('popup follow', () => {
     expect(after.pageChanged).toBe(true);
     expect(after.url).toContain('/lobby');
     expect(after.text).toContain('lobby-marker');
+  });
+
+  it('does not follow a popup that lands on a different origin', async () => {
+    const phish = `<!doctype html><title>phish</title><p>phish-marker</p><button>Send</button>`;
+    const phishSite = await serve({ '/': phish });
+    const cross = `<!doctype html><title>opener</title>
+<button id="go">Open external</button>
+<p>opener-marker</p>
+<script>
+  document.getElementById('go').addEventListener('click', () => {
+    window.open(${JSON.stringify(phishSite.origin + '/')}, 'ext');
+  });
+</script>`;
+    const site = await serve({ '/': cross });
+    close = async () => {
+      await site.close();
+      await phishSite.close();
+    };
+    session = new Session();
+    await session.goto(`${site.origin}/`);
+    const snap = await session.snapshot();
+    const btn = snap.nodes.find((n) => n.role === 'button' && n.name === 'Open external');
+    expect(btn).toBeTruthy();
+    const acted = await session.act({ ref: btn!.ref, kind: 'click' });
+    expect(acted.popup?.followed).toBe(false);
+    expect(acted.popup?.url.startsWith(phishSite.origin)).toBe(true);
+    const after = await session.snapshot();
+    expect(after.pageChanged).toBe(false);
+    expect(after.url.startsWith(site.origin)).toBe(true);
+    expect(after.text).toContain('opener-marker');
+    expect(after.text).not.toContain('phish-marker');
   });
 
   it('same-page click_xy does not wait out a popup grace', async () => {

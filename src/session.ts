@@ -2,10 +2,12 @@ import type { Browser, BrowserContext, Locator, Page } from 'playwright';
 import { AgentBrowserError } from './types.js';
 import type {
   ActArgs,
+  ActResult,
   ClickSpace,
   ClickXyArgs,
   ClickXyResult,
   GotoResult,
+  PopupNotice,
   ScreenshotResult,
   SessionMode,
   SnapshotHints,
@@ -39,8 +41,11 @@ export class Session {
   /** Pages whose current document already has the open hook. */
   private hookedPages = new WeakSet<Page>();
   private hookListeners = new WeakSet<Page>();
-  private hookedContexts = new WeakSet<BrowserContext>();
-  /** Incremented from the page when a gesture calls window.open or activates target=_blank. */
+  /** Pages that already expose the open signal. Not installed on other tabs. */
+  private boundPages = new WeakSet<Page>();
+  /** Page whose gesture may count as an open. Background tabs cannot arm this. */
+  private armedPage: Page | null = null;
+  /** Incremented from the armed page when a gesture calls window.open or activates target=_blank. */
   private openSignals = 0;
   private observed: { page: Page; url: string } | null = null;
   constructor(private deps: SessionDeps = {}) {}
@@ -178,18 +183,28 @@ export class Session {
     }
     const point = mapClick(space, args.x, args.y, viewport.width, viewport.height);
     const urlBefore = page.url();
+    let popup: PopupNotice | undefined;
     try {
-      await this.runFollowingPopup(page, () => page.mouse.click(point.x, point.y));
+      popup = await this.runFollowingPopup(page, () => page.mouse.click(point.x, point.y));
     } catch (e) {
       if (e instanceof AgentBrowserError) throw e;
       throw new AgentBrowserError(`click_xy failed: ${(e as Error).message}`);
     }
     const current = this.handle?.page ?? page;
     if (current !== page || current.url() !== urlBefore) this.invalidate();
-    return { ok: true, x: point.x, y: point.y, space, input: { x: args.x, y: args.y }, viewport };
+    return {
+      ok: true,
+      x: point.x,
+      y: point.y,
+      space,
+      input: { x: args.x, y: args.y },
+      viewport,
+      url: current.url(),
+      ...(popup ? { popup } : {}),
+    };
   }
 
-  async act(args: ActArgs): Promise<{ ok: true }> {
+  async act(args: ActArgs): Promise<ActResult> {
     // Never launch managed from act: refs only exist after a snapshot.
     if (this.mode === 'idle' || !this.lastSnapshotNodes || !this.handle) {
       throw new AgentBrowserError('snapshot first');
@@ -198,8 +213,9 @@ export class Session {
     if (!loc) throw new AgentBrowserError(`stale or unknown ref ${args.ref}; snapshot first`);
     const page = this.handle.page;
     const urlBefore = page.url();
+    let popup: PopupNotice | undefined;
     try {
-      await this.runFollowingPopup(page, async () => {
+      popup = await this.runFollowingPopup(page, async () => {
         if (args.kind === 'click') {
           await loc.click({ timeout: 10_000 }); // does not wait for navigation
         } else if (args.kind === 'type') {
@@ -219,17 +235,19 @@ export class Session {
     }
     const current = this.handle.page;
     if (current !== page || current.url() !== urlBefore) this.invalidate();
-    return { ok: true };
+    return { ok: true, url: current.url(), ...(popup ? { popup } : {}) };
   }
 
   /**
-   * Follow a popup or new page created by this action in the same browser context.
-   * Tabs that were already open stay put. There is still one active page afterward.
+   * Follow a same-origin popup created by this action in the same browser context.
+   * A different http(s) origin is left in the background and reported. The session
+   * stays on the opener. Tabs that were already open stay put.
    * A click that does not open a window returns with the click. The short cap runs
-   * only after the page reports window.open or a target=_blank activation.
+   * only after the armed page reports window.open or a target=_blank activation.
    */
-  private async runFollowingPopup(page: Page, action: () => Promise<void>): Promise<void> {
+  private async runFollowingPopup(page: Page, action: () => Promise<void>): Promise<PopupNotice | undefined> {
     await this.ensureOpenHook(page);
+    const openerUrl = page.url();
     const context = page.context();
     const before = new Set(context.pages());
     const signalsBefore = this.openSignals;
@@ -242,6 +260,7 @@ export class Session {
     };
     context.on('page', note);
     page.on('popup', note);
+    this.armedPage = page;
     try {
       await action();
       const inFlight = this.openSignals !== signalsBefore;
@@ -256,21 +275,21 @@ export class Session {
         });
       }
     } finally {
+      this.armedPage = null;
       context.off('page', note);
       page.off('popup', note);
       resolveWait = undefined;
     }
-    await this.adoptOpenedPage(context, before, newest);
+    return this.adoptOpenedPage(context, before, newest, openerUrl);
   }
 
   private async ensureOpenHook(page: Page): Promise<void> {
-    const context = page.context();
-    if (!this.hookedContexts.has(context)) {
-      await context.exposeBinding('__asbNotifyOpen', () => {
+    if (!this.boundPages.has(page)) {
+      await page.exposeBinding('__asbNotifyOpen', (source: { page?: Page }) => {
+        if (!source.page || source.page !== this.armedPage) return;
         this.openSignals += 1;
       });
-      await context.addInitScript(installOpenHook);
-      this.hookedContexts.add(context);
+      this.boundPages.add(page);
     }
     if (!this.hookListeners.has(page)) {
       this.hookListeners.add(page);
@@ -292,13 +311,27 @@ export class Session {
     return pageChanged;
   }
 
-  private async adoptOpenedPage(context: BrowserContext, before: Set<Page>, newest: Page | undefined): Promise<void> {
+  private async adoptOpenedPage(
+    context: BrowserContext,
+    before: Set<Page>,
+    newest: Page | undefined,
+    openerUrl: string,
+  ): Promise<PopupNotice | undefined> {
     const next = openedPage(context, before, newest);
-    if (!next || !this.handle || next === this.handle.page) return;
+    if (!next || !this.handle || next === this.handle.page) return undefined;
+    await next.waitForLoadState('domcontentloaded', { timeout: 5_000 }).catch(() => {});
+    if (safeUrl(next) === 'about:blank') {
+      await next.waitForURL((url) => url.href !== 'about:blank', { timeout: 1_000, waitUntil: 'domcontentloaded' }).catch(() => {});
+    }
+    const openedUrl = safeUrl(next);
+    if (!sameHttpOrigin(openerUrl, openedUrl)) {
+      await this.handle.page.bringToFront().catch(() => {});
+      return { followed: false, url: openedUrl };
+    }
     this.handle.page = next;
     this.invalidate();
-    await next.waitForLoadState('domcontentloaded', { timeout: 5_000 }).catch(() => {});
     await next.bringToFront().catch(() => {});
+    return { followed: true, url: openedUrl };
   }
 
   async attach(cdpUrl: string): Promise<{ ok: true; url: string }> {
@@ -346,6 +379,26 @@ export class Session {
  * lands in a few milliseconds; target=_blank a little later. No-popup clicks do not wait.
  */
 const POPUP_FOLLOW_CAP_MS = 80;
+
+function safeUrl(page: Page): string {
+  try {
+    return page.url();
+  } catch {
+    return '';
+  }
+}
+
+/** True when both URLs are http(s) and share an origin. about:blank and data: do not match. */
+function sameHttpOrigin(a: string, b: string): boolean {
+  try {
+    const left = new URL(a);
+    const right = new URL(b);
+    if (left.protocol !== 'http:' && left.protocol !== 'https:') return false;
+    return left.origin === right.origin;
+  } catch {
+    return false;
+  }
+}
 
 function openedPage(context: BrowserContext, before: Set<Page>, newest: Page | undefined): Page | undefined {
   if (newest && !newest.isClosed()) return newest;

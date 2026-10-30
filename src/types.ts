@@ -47,6 +47,19 @@ export type ClickXyArgs = {
   space?: ClickSpace;
 };
 
+/** Set when this action opened another page in the same browser context. */
+export type PopupNotice = {
+  /** True only when that page stayed on the same http(s) origin and became the active page. */
+  followed: boolean;
+  url: string;
+};
+
+export type ActResult = {
+  ok: true;
+  url: string;
+  popup?: PopupNotice;
+};
+
 export type ClickXyResult = {
   ok: true;
   /** CSS pixels actually clicked, viewport origin. */
@@ -56,6 +69,9 @@ export type ClickXyResult = {
   /** Coordinates as passed, before normalized values are converted. */
   input: { x: number; y: number };
   viewport: ViewportSize;
+  /** Document URL of the active page after the click. */
+  url: string;
+  popup?: PopupNotice;
 };
 
 export type ScreenshotResult = {
