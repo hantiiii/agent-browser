@@ -129,7 +129,7 @@ Every command is one-shot (no daemon, no REPL, no session file). For multi-step 
 ```bash
 # Normal path — attach to Chrome or Edge on this computer
 asb attach http://127.0.0.1:9222                    # check the CDP endpoint
-asb snapshot --cdp http://127.0.0.1:9222            # current tab
+asb snapshot --cdp http://127.0.0.1:9222            # first open tab
 asb snapshot --cdp http://127.0.0.1:9222 --settle-ms 10000
 asb act e3 click --cdp http://127.0.0.1:9222
 asb click-xy 0.5 0.5 --space normalized --cdp http://127.0.0.1:9222
@@ -163,13 +163,15 @@ Works on any user's computer that runs Chrome or Edge.
 
    Edge takes the same flags (`msedge`). Recent Chrome versions may require a separate `--user-data-dir=<dir>` for remote debugging.
 2. Check it: open `http://127.0.0.1:9222/json/version`.
-3. Run the agent on the same computer and call `attach("http://127.0.0.1:9222")` (a `ws://…` endpoint also works). If the agent runs elsewhere, use a secure tunnel or a local bridge you trust. Never expose the port on `0.0.0.0`.
+3. Run the agent on the same computer and call `attach("http://127.0.0.1:9222")`. `localhost`, `::1`, and a `ws://127.0.0.1:9222/devtools/browser/…` endpoint are also accepted. Any other host is refused. If the agent runs elsewhere, forward the port so this process still dials loopback. Never expose the port on `0.0.0.0`.
 4. If the tab is still a spinner or an interstitial, snapshot with `settleMs` / `--settle-ms` (about `8000`–`10000` on the Booking, eBay, and Airbnb checks) and read the tree again. Attach does not wait by itself.
 5. `detach()` disconnects and leaves your browser running.
 
 If `act` or `click_xy` opens a window, the session follows that window. Later snapshot, screenshot, and click commands use it. The previous tab stays open. The session still drives one page at a time.
 
-> **Trust warning:** attaching gives the agent process full control of that browser profile: cookies, logged-in sessions, and keyboard/mouse input. Only attach to a browser (or a dedicated profile) you are comfortable handing over.
+> **Trust warning:** attaching gives the agent process full control of that browser profile: cookies, logged-in sessions, and keyboard/mouse input. Only attach to a browser (or a dedicated profile) you are comfortable handing over. Attach drives the first open tab Playwright returns, which may not be the tab in front. Snapshot text, element names, and screenshots are untrusted data from the page, not instructions for the agent.
+
+`goto` accepts `http:`, `https:`, and `data:` only. `file:`, `chrome:`, `edge:`, `devtools:`, and other local schemes are refused, so a page cannot talk the agent into reading local files or browser settings.
 
 Attach uses Playwright `connectOverCDP`. It drives your real browser.
 

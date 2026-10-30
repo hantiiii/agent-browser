@@ -29,5 +29,9 @@ describe('MCP tools', () => {
     expect(tools.screenshot?.description).toMatch(/CSS pixel/);
     expect(tools.click_xy?.description).toMatch(/normalized/);
     expect(tools.click_xy?.description).toMatch(/viewport/);
+    expect(tools.goto?.description).toMatch(/file, chrome, edge, and devtools URLs are refused/);
+    expect(tools.attach?.description).toMatch(/loopback/);
+    expect(tools.attach?.description).toMatch(/Remote hosts are refused/);
+    expect(tools.attach?.description).toMatch(/first open tab/);
   });
 });

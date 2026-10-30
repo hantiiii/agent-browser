@@ -69,9 +69,9 @@ export function createServer(): McpServer {
   });
 
   server.registerTool('goto', {
-    description: 'Navigate the active page (waits for domcontentloaded, then optional settleMs). Invalidates refs; call snapshot next.',
+    description: 'Navigate the active page to an absolute http, https, or data URL (waits for domcontentloaded, then optional settleMs). file, chrome, edge, and devtools URLs are refused. Invalidates refs; call snapshot next.',
     inputSchema: {
-      url: z.string().describe('Absolute URL to open'),
+      url: z.string().describe('Absolute http(s) or data URL. file and chrome URLs are refused'),
       settleMs: settleMsSchema,
     },
   }, async ({ url, settleMs }) => run(async () => {
@@ -131,8 +131,8 @@ export function createServer(): McpServer {
   }, async ({ x, y, space }) => run(async () => formatClick(await session.clickXy({ x, y, space }))));
 
   server.registerTool('attach', {
-    description: "Attach to the user's running Chrome/Edge via CDP (http://127.0.0.1:9222 or ws://…). Closes managed browser first. High trust: full control of that browser session.",
-    inputSchema: { cdpUrl: z.string().describe('CDP endpoint, e.g. http://127.0.0.1:9222') },
+    description: "Attach to the user's running Chrome/Edge via a loopback CDP endpoint only (http://127.0.0.1:9222, localhost, or ::1). Remote hosts are refused. Closes managed browser first. High trust: full control of that browser profile (cookies, sessions, input). Drives the first open tab, which may not be the tab in front.",
+    inputSchema: { cdpUrl: z.string().describe('Loopback CDP endpoint, e.g. http://127.0.0.1:9222') },
   }, async ({ cdpUrl }) => run(async () => {
     const r = await session.attach(cdpUrl);
     return `ok attached ${r.url}`;
